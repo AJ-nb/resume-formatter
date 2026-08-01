@@ -1,0 +1,66 @@
+/* Print styles for PDF export */
+
+@media print {
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+  }
+
+  #toolbar,
+  #status-region,
+  #dialog-root,
+  .toast-container,
+  #resume-list-panel {
+    display: none !important;
+  }
+
+  #workspace {
+    padding: 0;
+    overflow: visible;
+    grid-area: unset;
+    display: block;
+  }
+
+  #resume-page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0;
+    box-shadow: none;
+    page-break-after: avoid;
+  }
+
+  .no-print,
+  .btn-del-bullet,
+  .btn-del-entry,
+  .btn-add-bullet,
+  .btn-add-entry,
+  .bullet-add-row,
+  .entry-add-row {
+    display: none !important;
+  }
+
+  [contenteditable] {
+    background: none !important;
+    cursor: default;
+  }
+
+  .editable-placeholder[data-empty="true"]::after {
+    display: none;
+  }
+
+  [data-empty="true"]::before {
+    display: none;
+  }
+
+  #photo-container[data-empty="true"]::after {
+    display: none;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+}

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resume Formatter</title>
+  <!-- __STYLES__ -->
+</head>
+<body>
+  <div id="app">
+    <aside id="toolbar">
+      <div class="toolbar-group">
+        <span class="toolbar-label">风格：</span>
+        <button id="btn-theme-a" class="toolbar-btn toolbar-btn-active" title="风格 A：黑体">黑体</button>
+        <button id="btn-theme-b" class="toolbar-btn" title="风格 B：宋体">宋体</button>
+      </div>
+      <div class="toolbar-group">
+        <button id="btn-fix-overflow" class="toolbar-btn" title="检测到溢出时自动修复 A4 排版">
+          <span class="btn-label" id="btn-fix-label">检查 A4</span>
+        </button>
+        <span class="toolbar-label">行高</span>
+        <input type="range" id="line-height-slider" class="toolbar-range" min="1.15" max="1.8" step="0.05" value="1.4" title="调整行高">
+        <span id="line-height-value" class="toolbar-label">1.40</span>
+        <span class="toolbar-label" style="margin-left:6px">字号</span>
+        <input type="range" id="font-size-slider" class="toolbar-range" min="7" max="12" step="0.5" value="9" title="调整正文字号">
+        <span id="font-size-value" class="toolbar-label">9pt</span>
+        <button id="btn-restore-import" class="toolbar-btn" title="恢复最近一次导入的内容">
+          <span class="btn-icon">↩️</span>
+          <span class="btn-label">恢复导入内容</span>
+        </button>
+      </div>
+      <div class="toolbar-group">
+        <button id="btn-photo-upload" class="toolbar-btn" title="上传证件照">
+          <span class="btn-icon">🖼️</span>
+          <span class="btn-label">上传照片</span>
+        </button>
+        <button id="btn-photo-delete" class="toolbar-btn" hidden title="删除证件照">
+          <span class="btn-icon">🗑️</span>
+          <span class="btn-label">删除照片</span>
+        </button>
+        <div class="photo-controls" hidden>
+          <label class="toolbar-label">缩放</label>
+          <input type="range" id="photo-scale" class="toolbar-range" min="0.5" max="2" step="0.01" value="1">
+          <button id="btn-photo-reset" class="toolbar-btn" title="恢复照片默认位置">重置</button>
+        </div>
+      </div>
+      <div class="toolbar-group toolbar-group-right">
+        <button id="btn-save" class="toolbar-btn toolbar-btn-primary" title="保存到当前文件">
+          <span class="btn-label">保存</span>
+        </button>
+        <button id="btn-save-as" class="toolbar-btn" title="另存为新文件名">
+          <span class="btn-label">另存为</span>
+        </button>
+        <button id="btn-export-pdf" class="toolbar-btn" title="通过浏览器导出 PDF">
+          <span class="btn-icon">🖨️</span>
+          <span class="btn-label">导出 PDF</span>
+        </button>
+      </div>
+      <div class="toolbar-info">
+        <div id="current-filename" class="info-item">未导入文件</div>
+        <div id="draft-status" class="info-item">—</div>
+        <div id="a4-status" class="info-item">—</div>
+      </div>
+    </aside>
+
+    <main id="workspace">
+      <div id="add-gutter" class="no-print"></div>
+      <section id="resume-page" data-theme="a">
+        <div id="resume-content">
+          <header id="resume-header">
+            <div id="header-info">
+              <h1 id="profile-name" class="editable-placeholder" data-empty="true" data-placeholder="姓名"></h1>
+              <p id="profile-headline" class="editable-placeholder" data-empty="true" data-placeholder="求职方向"></p>
+              <div id="contact-info"></div>
+            </div>
+            <div id="photo-container" data-empty="true"></div>
+          </header>
+          <div id="resume-sections"></div>
+        </div>
+      </section>
+    </main>
+
+    <aside id="resume-list-panel">
+      <div class="panel-header">
+        <span id="panel-dir-name" class="panel-dir-name" title="">简历版本</span>
+        <button id="btn-import-md" class="panel-icon-btn" title="导入 MD 文件">📄</button>
+        <button id="btn-pick-dir" class="panel-icon-btn" title="选择简历目录">📂</button>
+        <button id="btn-refresh-dir" class="panel-icon-btn" title="刷新列表" hidden>↻</button>
+      </div>
+      <ul id="resume-list"></ul>
+      <div id="panel-empty" class="panel-empty">
+        点击 📂 选择<br>简历目录
+      </div>
+    </aside>
+
+    <div id="status-region"></div>
+    <div id="dialog-root"></div>
+  </div>
+
+  <input type="file" id="file-input-md" accept=".md" hidden>
+  <input type="file" id="file-input-photo" accept="image/jpeg,image/png,image/webp" hidden>
+
+  <!-- __SCRIPTS__ -->
+</body>
+</html>
