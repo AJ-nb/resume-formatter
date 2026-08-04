@@ -15,11 +15,12 @@ function renderResume(state) {
 
 /**
  * Get current theme from #resume-page data-theme attribute.
- * @returns {"a"|"b"}
+ * @returns {"a"|"b"|"c"|"d"}
  */
 function getTheme() {
   const page = document.getElementById("resume-page");
-  return (page && page.dataset.theme === "b") ? "b" : "a";
+  const t = page && page.dataset.theme;
+  return (t === "b" || t === "c" || t === "d") ? t : "a";
 }
 
 /**

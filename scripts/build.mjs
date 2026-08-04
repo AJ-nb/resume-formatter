@@ -27,6 +27,7 @@ const JS_FILES = [
   "js/utils.js",
   "js/state.js",
   "js/parser.js",
+  "js/json-importer.js",
   "js/validator.js",
   "js/renderer.js",
   "js/editor.js",

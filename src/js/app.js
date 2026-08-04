@@ -31,7 +31,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // Wire up toolbar buttons
   wireToolbar();
   initThemeSwitcher();
+  initToolbarMenus();
   initResumeListPanel();
+  initJsonImport();
+  initMarkdownPaste();
 });
 
 /**
@@ -244,22 +247,18 @@ date: 2024.01–2024.03
   showToast("已下载模板，用文本编辑器填写后导入即可。", "success");
 }
 
-/**
- * 保存 — 直接用当前文件名下载，无弹窗。
- */
+/** Save the current text state as a new local Markdown snapshot. */
 function handleSave() {
+  syncFocusedEditor();
   const state = getState();
   if (!state.profile.name && (!state.sections || state.sections.length === 0)) {
     showToast("请先导入简历。", "warning");
     return;
   }
-  const fileName = sanitizeFileName(
-    state.resumeName || state.source.fileName.replace(/\.md$/, "") || "resume"
-  );
   try {
-    exportAsHtml(state, fileName);
+    const snapshot = saveMarkdownSnapshot(state);
     clearDirty();
-    showToast(`已保存：${fileName}.html`, "success");
+    showToast(`已保存 MD 快照：${snapshot.name}`, "success");
   } catch (e) {
     console.error("Save failed:", e);
     showToast("保存失败，请重试。", "error");
@@ -267,9 +266,10 @@ function handleSave() {
 }
 
 /**
- * 另存为 — 弹输入框让用户指定新文件名，再下载。
+ * Save a named local Markdown snapshot.
  */
 function handleSaveAs() {
+  syncFocusedEditor();
   const state = getState();
   if (!state.profile.name && (!state.sections || state.sections.length === 0)) {
     showToast("请先导入简历。", "warning");
@@ -285,9 +285,9 @@ function handleSaveAs() {
     confirmText: "保存",
     onSubmit: (fileName) => {
       try {
-        exportAsHtml(state, fileName);
+        const snapshot = saveMarkdownSnapshot(state, fileName);
         clearDirty();
-        showToast(`已保存：${fileName}.html`, "success");
+        showToast(`已保存 MD 快照：${snapshot.name}`, "success");
       } catch (e) {
         console.error("Save As failed:", e);
         showToast("保存失败，请重试。", "error");
@@ -493,6 +493,62 @@ let _dirHandle = null;
 /** @type {string|null} — filename of currently active resume */
 let _activeFile = null;
 
+let _directoryFiles = [];
+let _directoryName = "简历版本";
+let _directoryCanRefresh = false;
+
+const MD_SNAPSHOTS_KEY = "resume-formatter:md-snapshots-v1";
+
+function syncFocusedEditor() {
+  const active = document.activeElement;
+  if (active && active.closest && active.closest("#resume-content")) active.blur();
+}
+
+function loadMarkdownSnapshots() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MD_SNAPSHOTS_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.error("Failed to load Markdown snapshots:", e);
+    return [];
+  }
+}
+
+function saveMarkdownSnapshot(state, customName) {
+  const now = new Date();
+  const timestamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    "-",
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0"),
+  ].join("");
+  const baseName = sanitizeFileName(
+    customName || state.resumeName || (state.source.fileName || "").replace(/\.md$/i, "") || "resume"
+  ).replace(/\.md$/i, "");
+  const snapshot = {
+    id: generateId(),
+    name: `${baseName}${customName ? "" : `-${timestamp}`}.md`,
+    markdown: serializeStateToMarkdown(state),
+    createdAt: now.toISOString(),
+  };
+  const snapshots = loadMarkdownSnapshots();
+  snapshots.unshift(snapshot);
+  localStorage.setItem(MD_SNAPSHOTS_KEY, JSON.stringify(snapshots));
+  _activeFile = `snapshot:${snapshot.id}`;
+  renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
+  return snapshot;
+}
+
+function deleteMarkdownSnapshot(snapshotId) {
+  const snapshots = loadMarkdownSnapshots().filter((snapshot) => snapshot.id !== snapshotId);
+  localStorage.setItem(MD_SNAPSHOTS_KEY, JSON.stringify(snapshots));
+  if (_activeFile === `snapshot:${snapshotId}`) _activeFile = null;
+  renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
+}
+
 const IDB_NAME    = "resume-formatter";
 const IDB_STORE   = "config";
 const IDB_DIR_KEY = "dir-handle";
@@ -547,11 +603,30 @@ async function loadDirHandle() {
 function initResumeListPanel() {
   const btnPick    = document.getElementById("btn-pick-dir");
   const btnRefresh = document.getElementById("btn-refresh-dir");
+  const directoryInput = document.getElementById("file-input-directory");
+
+  if (directoryInput) {
+    directoryInput.addEventListener("change", () => {
+      const selectedFiles = Array.from(directoryInput.files || []);
+      if (selectedFiles.length === 0) return;
+
+      _dirHandle = null;
+      const rootName = selectedFiles.length === 1 ? "所选 Markdown" : `所选 Markdown（${selectedFiles.length}）`;
+      const files = selectedFiles
+        .filter((file) => /\.md$/i.test(file.name))
+        .map((file) => ({
+          name: file.name,
+          handle: { getFile: async () => file },
+        }));
+      renderResumeFileList(files, rootName, false);
+      directoryInput.value = "";
+    });
+  }
 
   if (btnPick) {
     btnPick.addEventListener("click", async () => {
       if (!("showDirectoryPicker" in window)) {
-        showToast("当前浏览器不支持目录选择，请使用 Chrome。", "error");
+        if (directoryInput) directoryInput.click();
         return;
       }
       try {
@@ -559,19 +634,32 @@ function initResumeListPanel() {
         await saveDirHandle(_dirHandle);
         await refreshResumeList();
       } catch (e) {
-        // User cancelled
+        if (e.name === "AbortError") return;
+        console.error("Failed to open resume directory:", e);
+        if (directoryInput) {
+          directoryInput.click();
+        } else {
+          showToast("无法读取该目录：" + e.message, "error");
+        }
       }
     });
   }
 
   if (btnRefresh) {
     btnRefresh.addEventListener("click", async () => {
-      if (_dirHandle) await refreshResumeList();
+      if (!_dirHandle) return;
+      try {
+        await refreshResumeList();
+      } catch (e) {
+        console.error("Failed to refresh resume directory:", e);
+        showToast("刷新目录失败：" + e.message, "error");
+      }
     });
   }
 
   // Try to restore saved handle on startup
   restoreDirHandle();
+  renderResumeFileList([], "简历版本", false);
 }
 
 /**
@@ -648,41 +736,119 @@ function showReauthNotice(handle) {
 async function refreshResumeList() {
   if (!_dirHandle) return;
 
-  const list    = document.getElementById("resume-list");
-  const empty   = document.getElementById("panel-empty");
+  // Collect Markdown files recursively so versions can live in subfolders.
+  const files = [];
+  await collectMarkdownFiles(_dirHandle, "", files);
+
+  renderResumeFileList(files, _dirHandle.name, true);
+}
+
+/**
+ * Render collected Markdown files in the version panel.
+ * @param {Array<{name:string, handle:{getFile:Function}}>} files
+ * @param {string} directoryName
+ * @param {boolean} canRefresh
+ */
+function renderResumeFileList(files, directoryName, canRefresh) {
+  const list = document.getElementById("resume-list");
+  const empty = document.getElementById("panel-empty");
   const dirName = document.getElementById("panel-dir-name");
   const btnRefresh = document.getElementById("btn-refresh-dir");
 
+  _directoryFiles = files;
+  _directoryName = directoryName;
+  _directoryCanRefresh = canRefresh;
+
   if (dirName) {
-    dirName.textContent = _dirHandle.name;
-    dirName.title       = _dirHandle.name;
+    dirName.textContent = directoryName;
+    dirName.title = directoryName;
   }
-  if (btnRefresh) btnRefresh.hidden = false;
+  if (btnRefresh) btnRefresh.hidden = !canRefresh;
 
-  // Collect .md files
-  const files = [];
-  for await (const [name, handle] of _dirHandle.entries()) {
-    if (handle.kind === "file" && name.endsWith(".md")) {
-      files.push({ name, handle });
-    }
-  }
-
-  // Sort alphabetically
-  files.sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  const sourceFiles = [...files].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  const snapshots = loadMarkdownSnapshots();
 
   if (list) {
     list.innerHTML = "";
-    for (const { name, handle } of files) {
+    const appendHeading = (text) => {
+      const heading = document.createElement("li");
+      heading.className = "resume-list-heading";
+      heading.textContent = text;
+      list.appendChild(heading);
+    };
+
+    if (snapshots.length > 0) appendHeading("本地快照");
+    for (const snapshot of snapshots) {
+      const versionKey = `snapshot:${snapshot.id}`;
       const li = document.createElement("li");
-      li.className = "resume-list-item" + (name === _activeFile ? " active" : "");
-      li.textContent = name.replace(/\.md$/, "");
-      li.title       = name;
-      li.addEventListener("click", () => loadResumeFromHandle(name, handle));
+      li.className = "resume-list-item resume-list-snapshot" + (versionKey === _activeFile ? " active" : "");
+      li.title = snapshot.name;
+      li.dataset.versionKey = versionKey;
+
+      const label = document.createElement("span");
+      label.textContent = snapshot.name.replace(/\.md$/i, "");
+      li.appendChild(label);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.className = "resume-list-delete";
+      deleteButton.textContent = "×";
+      deleteButton.title = "删除本地快照";
+      deleteButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showDialog({
+          title: "删除 MD 快照",
+          message: `确定删除“${snapshot.name}”吗？`,
+          buttons: [
+            { text: "取消" },
+            { text: "删除", action: () => deleteMarkdownSnapshot(snapshot.id) },
+          ],
+        });
+      });
+      li.appendChild(deleteButton);
+
+      const handle = {
+        getFile: async () => new File([snapshot.markdown], snapshot.name, { type: "text/markdown" }),
+      };
+      li.addEventListener("click", () => loadResumeFromHandle(snapshot.name, handle, versionKey));
+      list.appendChild(li);
+    }
+
+    if (sourceFiles.length > 0) appendHeading("目录文件");
+    for (const { name, handle } of sourceFiles) {
+      const versionKey = `source:${name}`;
+      const li = document.createElement("li");
+      li.className = "resume-list-item" + (versionKey === _activeFile ? " active" : "");
+      li.textContent = name.replace(/\.md$/i, "");
+      li.title = name;
+      li.dataset.versionKey = versionKey;
+      li.addEventListener("click", () => loadResumeFromHandle(name, handle, versionKey));
       list.appendChild(li);
     }
   }
 
-  if (empty) empty.classList.toggle("hidden", files.length > 0);
+  if (empty) {
+    const hasVersions = sourceFiles.length > 0 || snapshots.length > 0;
+    empty.textContent = hasVersions ? "" : "选择 Markdown 文件，或保存当前内容创建快照";
+    empty.classList.toggle("hidden", hasVersions);
+  }
+}
+
+/**
+ * Recursively collect Markdown files from a directory.
+ * @param {FileSystemDirectoryHandle} directory
+ * @param {string} prefix
+ * @param {Array<{name:string, handle:FileSystemFileHandle}>} files
+ */
+async function collectMarkdownFiles(directory, prefix, files) {
+  for await (const [name, handle] of directory.entries()) {
+    if (name.startsWith(".")) continue;
+    const relativeName = prefix ? `${prefix}/${name}` : name;
+    if (handle.kind === "file" && /\.md$/i.test(name)) {
+      files.push({ name: relativeName, handle });
+    } else if (handle.kind === "directory") {
+      await collectMarkdownFiles(handle, relativeName, files);
+    }
+  }
 }
 
 /**
@@ -690,7 +856,7 @@ async function refreshResumeList() {
  * @param {string} name
  * @param {FileSystemFileHandle} handle
  */
-async function loadResumeFromHandle(name, handle) {
+async function loadResumeFromHandle(name, handle, versionKey = name) {
   // Warn if dirty
   if (isDirty()) {
     const confirmed = await new Promise((resolve) => {
@@ -720,9 +886,9 @@ async function loadResumeFromHandle(name, handle) {
       clearDirty();
 
       // Mark active
-      _activeFile = name;
+      _activeFile = versionKey;
       document.querySelectorAll(".resume-list-item").forEach((li) => {
-        li.classList.toggle("active", li.title === name);
+        li.classList.toggle("active", li.dataset.versionKey === versionKey);
       });
 
       const info = validation.errors.find((e) => e.level === "info");
@@ -741,11 +907,15 @@ async function loadResumeFromHandle(name, handle) {
 }
 
 /**
- * Initialize theme switcher A/B buttons.
+ * Initialize theme switcher.
  */
 function initThemeSwitcher() {
   const btnA = document.getElementById("btn-theme-a");
   const btnB = document.getElementById("btn-theme-b");
+  const btnC = document.getElementById("btn-theme-c");
+  const btnD = document.getElementById("btn-theme-d");
+  const themeLabel = document.getElementById("current-theme-label");
+  const themeMenu = document.getElementById("theme-menu");
   const page = document.getElementById("resume-page");
   if (!btnA || !btnB || !page) return;
 
@@ -753,6 +923,12 @@ function initThemeSwitcher() {
     page.dataset.theme = theme;
     btnA.classList.toggle("toolbar-btn-active", theme === "a");
     btnB.classList.toggle("toolbar-btn-active", theme === "b");
+    if (btnC) btnC.classList.toggle("toolbar-btn-active", theme === "c");
+    if (btnD) btnD.classList.toggle("toolbar-btn-active", theme === "d");
+    if (themeLabel) {
+      themeLabel.textContent = { a: "黑体", b: "宋体", c: "思源", d: "学术" }[theme];
+    }
+    if (themeMenu) themeMenu.open = false;
     // Re-render header to reflect theme-specific contact format
     const state = getState();
     if (state.sections && state.sections.length > 0) {
@@ -762,6 +938,34 @@ function initThemeSwitcher() {
 
   btnA.addEventListener("click", () => setTheme("a"));
   btnB.addEventListener("click", () => setTheme("b"));
+  if (btnC) btnC.addEventListener("click", () => setTheme("c"));
+  if (btnD) btnD.addEventListener("click", () => setTheme("d"));
+}
+
+function initToolbarMenus() {
+  const menus = Array.from(document.querySelectorAll("#toolbar .toolbar-menu"));
+
+  menus.forEach((menu) => {
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) return;
+      menus.forEach((other) => {
+        if (other !== menu) other.open = false;
+      });
+    });
+  });
+
+  const moreMenu = document.getElementById("more-menu");
+  if (moreMenu) {
+    moreMenu.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", () => { moreMenu.open = false; });
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    menus.forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
 }
 
 
@@ -770,4 +974,482 @@ function closeDialog() {
   if (!root) return;
   root.innerHTML = "";
   root.classList.remove("active");
+}
+
+/**
+ * JSON import initialization.
+ * Wires up JSON import buttons and file input.
+ */
+function initJsonImport() {
+  const btnPasteJson = document.getElementById("btn-paste-json");
+  const btnImportJsonFile = document.getElementById("btn-import-json-file");
+  const btnShowJsonExample = document.getElementById("btn-show-json-example");
+  const fileInput = document.getElementById("file-input-json");
+
+  if (btnPasteJson) btnPasteJson.addEventListener("click", handlePasteJson);
+  if (btnImportJsonFile) btnImportJsonFile.addEventListener("click", () => {
+    if (fileInput) fileInput.click();
+  });
+  if (btnShowJsonExample) btnShowJsonExample.addEventListener("click", handleShowJsonExample);
+
+  // 4 conversion prompt buttons
+  const btnPdfToMd = document.getElementById("btn-copy-pdf-to-md");
+  const btnPdfToJson = document.getElementById("btn-copy-pdf-to-json");
+  const btnDocxToMd = document.getElementById("btn-copy-docx-to-md");
+  const btnDocxToJson = document.getElementById("btn-copy-docx-to-json");
+
+  if (btnPdfToMd) btnPdfToMd.addEventListener("click", () => handleCopyPrompt(PROMPT_PDF_TO_MD, "PDF 转 Markdown Prompt 已复制"));
+  if (btnPdfToJson) btnPdfToJson.addEventListener("click", () => handleCopyPrompt(PROMPT_PDF_TO_JSON, "PDF 转 JSON Prompt 已复制"));
+  if (btnDocxToMd) btnDocxToMd.addEventListener("click", () => handleCopyPrompt(PROMPT_DOCX_TO_MD, "DOCX 转 Markdown Prompt 已复制"));
+  if (btnDocxToJson) btnDocxToJson.addEventListener("click", () => handleCopyPrompt(PROMPT_DOCX_TO_JSON, "DOCX 转 JSON Prompt 已复制"));
+
+  if (fileInput) {
+    fileInput.addEventListener("change", (e) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+      handleImportJsonFile(files[0], fileInput);
+    });
+  }
+}
+
+function initMarkdownPaste() {
+  const btnPasteMd = document.getElementById("btn-paste-md");
+  const btnShowMdExample = document.getElementById("btn-show-md-example");
+
+  if (btnPasteMd) btnPasteMd.addEventListener("click", handlePasteMarkdown);
+  if (btnShowMdExample) btnShowMdExample.addEventListener("click", handleShowMdExample);
+}
+
+function handlePasteMarkdown() {
+  _proceedWithDirtyCheck(() => {
+    const root = document.getElementById("dialog-root");
+    if (!root) return;
+
+    root.innerHTML = "";
+    root.classList.add("active");
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "dialog-backdrop";
+    backdrop.addEventListener("click", closeDialog);
+    root.appendChild(backdrop);
+
+    const box = document.createElement("div");
+    box.className = "dialog-box";
+    box.style.maxWidth = "600px";
+
+    const titleEl = document.createElement("h3");
+    titleEl.className = "dialog-title";
+    titleEl.textContent = "粘贴 Markdown";
+    box.appendChild(titleEl);
+
+    const msgEl = document.createElement("p");
+    msgEl.className = "dialog-message";
+    msgEl.textContent = "将简历 Markdown 粘贴到下方文本框。";
+    box.appendChild(msgEl);
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "dialog-input";
+    textarea.style.width = "100%";
+    textarea.style.minHeight = "300px";
+    textarea.style.fontFamily = "monospace";
+    textarea.style.fontSize = "12px";
+    textarea.placeholder = "在此粘贴 Markdown...";
+    box.appendChild(textarea);
+
+    const exampleLink = document.createElement("a");
+    exampleLink.textContent = "填入示例 Markdown";
+    exampleLink.href = "#";
+    exampleLink.style.display = "block";
+    exampleLink.style.marginTop = "6px";
+    exampleLink.style.fontSize = "12px";
+    exampleLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      textarea.value = MARKDOWN_EXAMPLE;
+    });
+    box.appendChild(exampleLink);
+
+    const actions = document.createElement("div");
+    actions.className = "dialog-actions";
+
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "dialog-btn";
+    clearBtn.textContent = "清空";
+    clearBtn.addEventListener("click", () => { textarea.value = ""; });
+    actions.appendChild(clearBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "dialog-btn";
+    cancelBtn.textContent = "取消";
+    cancelBtn.addEventListener("click", closeDialog);
+    actions.appendChild(cancelBtn);
+
+    const importBtn = document.createElement("button");
+    importBtn.className = "dialog-btn dialog-btn-primary";
+    importBtn.textContent = "导入";
+    importBtn.addEventListener("click", () => {
+      const raw = textarea.value.trim();
+      if (!raw) {
+        showToast("请先粘贴 Markdown 内容。", "warning");
+        return;
+      }
+      const parseResult = parseMarkdown(raw);
+      const validation = validateAndBuildState(parseResult, "粘贴的 Markdown");
+      closeDialog();
+      if (validation.state) {
+        setState(validation.state);
+        renderResume(validation.state);
+        updateA4Status();
+        clearDirty();
+        const infoMsg = validation.errors.find((err) => err.level === "info");
+        if (infoMsg) {
+          showToast(infoMsg.message, "success");
+        } else {
+          showToast("已导入：粘贴的 Markdown", "success");
+        }
+      } else {
+        const errorMsgs = validation.errors
+          .filter((err) => err.level === "error")
+          .map((err) => err.message);
+        showDialog({
+          title: "Markdown 导入失败",
+          message: errorMsgs.join("\n") || "无法解析该 Markdown。",
+          buttons: [{ text: "关闭", primary: true }],
+        });
+      }
+    });
+    actions.appendChild(importBtn);
+
+    box.appendChild(actions);
+    root.appendChild(box);
+    setTimeout(() => textarea.focus(), 50);
+  });
+}
+
+function handleShowMdExample() {
+  const root = document.getElementById("dialog-root");
+  if (!root) return;
+
+  root.innerHTML = "";
+  root.classList.add("active");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "dialog-backdrop";
+  backdrop.addEventListener("click", closeDialog);
+  root.appendChild(backdrop);
+
+  const box = document.createElement("div");
+  box.className = "dialog-box";
+  box.style.maxWidth = "600px";
+
+  const titleEl = document.createElement("h3");
+  titleEl.className = "dialog-title";
+  titleEl.textContent = "Markdown 示例（Schema v1）";
+  box.appendChild(titleEl);
+
+  const pre = document.createElement("pre");
+  pre.style.whiteSpace = "pre-wrap";
+  pre.style.wordBreak = "break-all";
+  pre.style.fontFamily = "monospace";
+  pre.style.fontSize = "12px";
+  pre.style.maxHeight = "400px";
+  pre.style.overflow = "auto";
+  pre.style.background = "var(--bg-secondary, #f5f5f5)";
+  pre.style.padding = "8px";
+  pre.style.borderRadius = "4px";
+  pre.textContent = MARKDOWN_EXAMPLE;
+  box.appendChild(pre);
+
+  const actions = document.createElement("div");
+  actions.className = "dialog-actions";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "dialog-btn";
+  closeBtn.textContent = "关闭";
+  closeBtn.addEventListener("click", closeDialog);
+  actions.appendChild(closeBtn);
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "dialog-btn dialog-btn-primary";
+  copyBtn.textContent = "复制示例";
+  copyBtn.addEventListener("click", () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      showToast("当前浏览器不支持自动复制。", "warning");
+      return;
+    }
+    navigator.clipboard.writeText(MARKDOWN_EXAMPLE).then(() => {
+      showToast("Markdown 示例已复制。", "success");
+      closeDialog();
+    }).catch(() => {
+      showToast("复制失败，请手动复制。", "error");
+    });
+  });
+  actions.appendChild(copyBtn);
+
+  box.appendChild(actions);
+  root.appendChild(box);
+}
+
+/**
+ * Check if current state is dirty and confirm before proceeding.
+ * @param {Function} onProceed
+ */
+function _proceedWithDirtyCheck(onProceed) {
+  if (!isDirty()) {
+    onProceed();
+    return;
+  }
+  showDialog({
+    title: "有未保存的修改",
+    message: "当前简历有未保存的修改，导入新内容将覆盖。是否继续？",
+    buttons: [
+      { text: "取消" },
+      { text: "继续导入", primary: true, action: onProceed },
+    ],
+  });
+}
+
+/**
+ * Handle "粘贴 JSON" button — show dialog with textarea.
+ */
+function handlePasteJson() {
+  _proceedWithDirtyCheck(() => {
+    const root = document.getElementById("dialog-root");
+    if (!root) return;
+
+    root.innerHTML = "";
+    root.classList.add("active");
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "dialog-backdrop";
+    backdrop.addEventListener("click", closeDialog);
+    root.appendChild(backdrop);
+
+    const box = document.createElement("div");
+    box.className = "dialog-box";
+    box.style.maxWidth = "600px";
+
+    const titleEl = document.createElement("h3");
+    titleEl.className = "dialog-title";
+    titleEl.textContent = "粘贴 JSON";
+    box.appendChild(titleEl);
+
+    const msgEl = document.createElement("p");
+    msgEl.className = "dialog-message";
+    msgEl.textContent = "将简历 JSON 粘贴到下方文本框，支持带 ```json 代码块标记。";
+    box.appendChild(msgEl);
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "dialog-input";
+    textarea.style.width = "100%";
+    textarea.style.minHeight = "300px";
+    textarea.style.fontFamily = "monospace";
+    textarea.style.fontSize = "12px";
+    textarea.placeholder = "在此粘贴 JSON...";
+    box.appendChild(textarea);
+
+    const exampleLink = document.createElement("a");
+    exampleLink.textContent = "填入示例 JSON";
+    exampleLink.href = "#";
+    exampleLink.style.display = "block";
+    exampleLink.style.marginTop = "6px";
+    exampleLink.style.fontSize = "12px";
+    exampleLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      textarea.value = JSON_EXAMPLE;
+    });
+    box.appendChild(exampleLink);
+
+    const actions = document.createElement("div");
+    actions.className = "dialog-actions";
+
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "dialog-btn";
+    clearBtn.textContent = "清空";
+    clearBtn.addEventListener("click", () => {
+      textarea.value = "";
+    });
+    actions.appendChild(clearBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "dialog-btn";
+    cancelBtn.textContent = "取消";
+    cancelBtn.addEventListener("click", closeDialog);
+    actions.appendChild(cancelBtn);
+
+    const importBtn = document.createElement("button");
+    importBtn.className = "dialog-btn dialog-btn-primary";
+    importBtn.textContent = "导入";
+    importBtn.addEventListener("click", () => {
+      const raw = textarea.value.trim();
+      if (!raw) {
+        showToast("请先粘贴 JSON 内容。", "warning");
+        return;
+      }
+      const result = importJsonResume(raw, "粘贴的 JSON");
+      closeDialog();
+      handleJsonImportResult(result, "粘贴的 JSON", raw);
+    });
+    actions.appendChild(importBtn);
+
+    box.appendChild(actions);
+    root.appendChild(box);
+    setTimeout(() => textarea.focus(), 50);
+  });
+}
+
+/**
+ * Handle .json file import.
+ * @param {File} file
+ * @param {HTMLInputElement} fileInput
+ */
+function handleImportJsonFile(file, fileInput) {
+  _proceedWithDirtyCheck(() => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const raw = e.target.result;
+      const result = importJsonResume(raw, file.name);
+      handleJsonImportResult(result, file.name, raw);
+    };
+    reader.onerror = () => {
+      showToast("文件读取失败，请重试。", "error");
+    };
+    reader.readAsText(file);
+    if (fileInput) fileInput.value = "";
+  });
+}
+
+/**
+ * Copy AI conversion prompt to clipboard.
+ */
+function handleCopyAiPrompt() {
+  // Deprecated — replaced by handleCopyPrompt
+}
+
+function handleCopyPrompt(promptText, toastMessage) {
+  if (typeof navigator === "undefined" || !navigator.clipboard) {
+    showToast("当前浏览器不支持自动复制，请手动复制。", "warning");
+    return;
+  }
+  navigator.clipboard.writeText(promptText).then(() => {
+    showToast(toastMessage, "success");
+  }).catch(() => {
+    showToast("复制失败，请手动复制。", "error");
+  });
+}
+
+/**
+ * Show JSON example dialog.
+ */
+function handleShowJsonExample() {
+  const root = document.getElementById("dialog-root");
+  if (!root) return;
+
+  root.innerHTML = "";
+  root.classList.add("active");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "dialog-backdrop";
+  backdrop.addEventListener("click", closeDialog);
+  root.appendChild(backdrop);
+
+  const box = document.createElement("div");
+  box.className = "dialog-box";
+  box.style.maxWidth = "600px";
+
+  const titleEl = document.createElement("h3");
+  titleEl.className = "dialog-title";
+  titleEl.textContent = "JSON 示例";
+  box.appendChild(titleEl);
+
+  const pre = document.createElement("pre");
+  pre.style.whiteSpace = "pre-wrap";
+  pre.style.wordBreak = "break-all";
+  pre.style.fontFamily = "monospace";
+  pre.style.fontSize = "12px";
+  pre.style.maxHeight = "400px";
+  pre.style.overflow = "auto";
+  pre.style.background = "var(--bg-secondary, #f5f5f5)";
+  pre.style.padding = "8px";
+  pre.style.borderRadius = "4px";
+  pre.textContent = JSON_EXAMPLE;
+  box.appendChild(pre);
+
+  const actions = document.createElement("div");
+  actions.className = "dialog-actions";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "dialog-btn";
+  closeBtn.textContent = "关闭";
+  closeBtn.addEventListener("click", closeDialog);
+  actions.appendChild(closeBtn);
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "dialog-btn dialog-btn-primary";
+  copyBtn.textContent = "复制示例";
+  copyBtn.addEventListener("click", () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      showToast("当前浏览器不支持自动复制。", "warning");
+      return;
+    }
+    navigator.clipboard.writeText(JSON_EXAMPLE).then(() => {
+      showToast("JSON 示例已复制。", "success");
+      closeDialog();
+    }).catch(() => {
+      showToast("复制失败，请手动复制。", "error");
+    });
+  });
+  actions.appendChild(copyBtn);
+
+  box.appendChild(actions);
+  root.appendChild(box);
+}
+
+/**
+ * Handle JSON import result — success or failure.
+ * @param {{ errors: object[], state: object|null }} result
+ * @param {string} fileName
+ * @param {string} [rawJson]
+ */
+function handleJsonImportResult(result, fileName, rawJson) {
+  if (result.state) {
+    setState(result.state);
+    renderResume(result.state);
+    updateA4Status();
+    clearDirty();
+
+    const infoMsg = result.errors.find((err) => err.level === "info");
+    if (infoMsg) {
+      showToast(infoMsg.message, "success");
+    } else {
+      showToast("已导入：" + fileName, "success");
+    }
+  } else {
+    const errorMsgs = result.errors
+      .filter((err) => err.level === "error")
+      .map((err) => err.message);
+
+    showDialog({
+      title: "JSON 导入失败",
+      message: errorMsgs.join("\n") || "无法解析该 JSON 文件。",
+      buttons: [
+        { text: "关闭" },
+        {
+          text: "复制修复 Prompt",
+          primary: true,
+          action: () => {
+            const prompt = buildFixPrompt(result.errors, rawJson || "", !!rawJson);
+            if (typeof navigator === "undefined" || !navigator.clipboard) {
+              showToast("当前浏览器不支持自动复制。", "warning");
+              return;
+            }
+            navigator.clipboard.writeText(prompt).then(() => {
+              showToast("修复 Prompt 已复制到剪贴板。", "success");
+            }).catch(() => {
+              showToast("复制失败，请手动复制。", "error");
+            });
+          },
+        },
+      ],
+    });
+  }
 }
