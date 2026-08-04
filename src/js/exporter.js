@@ -4,6 +4,71 @@
  */
 
 /**
+ * Serialize Resume State to Schema v1 Markdown.
+ * @param {object} state
+ * @returns {string}
+ */
+function serializeStateToMarkdown(state) {
+  const cleanScalar = (value) => String(value || "").replace(/[\r\n]+/g, " ").trim();
+  const lines = ["---", "schema_version: 1"];
+  const frontmatter = [
+    ["resume_name", state.resumeName],
+    ["name", state.profile.name],
+    ["headline", state.profile.headline],
+    ["location", state.profile.location],
+    ["phone", state.profile.phone],
+    ["email", state.profile.email],
+    ["website", state.profile.website],
+    ["portfolio", state.profile.portfolio],
+    ["github", state.profile.github],
+  ];
+
+  frontmatter.forEach(([key, value]) => {
+    const cleaned = cleanScalar(value);
+    if (cleaned) lines.push(`${key}: ${cleaned}`);
+  });
+  lines.push("---", "");
+
+  const sectionTitles = {
+    education: "教育经历",
+    experience: "实习经历",
+    projects: "项目经历",
+    skills: "技能",
+  };
+
+  (state.sections || []).forEach((section) => {
+    lines.push(`## ${sectionTitles[section.type] || cleanScalar(section.title) || section.type}`, "");
+    (section.entries || []).forEach((entry) => {
+      if (section.type !== "skills") {
+        lines.push(`### ${cleanScalar(entry.name)}`);
+        if (entry.role) lines.push(`role: ${cleanScalar(entry.role)}`);
+        if (entry.date) lines.push(`date: ${cleanScalar(entry.date)}`);
+        if (entry.location) lines.push(`location: ${cleanScalar(entry.location)}`);
+        lines.push("");
+      }
+
+      (entry.bullets || []).forEach((bullet) => {
+        lines.push(`- ${serializeInlineMarkdown(bullet.content)}`);
+      });
+      lines.push("");
+    });
+  });
+
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}
+
+/**
+ * @param {Array<{type:string,value:string}>} tokens
+ * @returns {string}
+ */
+function serializeInlineMarkdown(tokens) {
+  return (tokens || []).map((token) => {
+    const value = String(token.value || "").replace(/[\r\n]+/g, " ");
+    return token.type === "strong" ? `**${value}**` : value;
+  }).join("");
+}
+
+/**
  * Export current resume as a standalone HTML file.
  * @param {object} state
  * @param {string} [customFileName]

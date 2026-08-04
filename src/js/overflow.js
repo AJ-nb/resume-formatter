@@ -4,6 +4,28 @@
  */
 
 const OVERFLOW_TOLERANCE_PX = 2;
+let _a4StatusFrame = 0;
+let _a4StatusTimer = 0;
+let _a4StatusSuspended = false;
+
+function setA4StatusSuspended(suspended) {
+  _a4StatusSuspended = suspended;
+  if (!suspended) scheduleA4Status();
+}
+
+/** Coalesce repeated layout measurements caused by sliders and ResizeObserver. */
+function scheduleA4Status(delay = 0) {
+  if (_a4StatusSuspended) return;
+  if (_a4StatusFrame) cancelAnimationFrame(_a4StatusFrame);
+  if (_a4StatusTimer) clearTimeout(_a4StatusTimer);
+  _a4StatusTimer = window.setTimeout(() => {
+    _a4StatusTimer = 0;
+    _a4StatusFrame = requestAnimationFrame(() => {
+      _a4StatusFrame = 0;
+      updateA4Status();
+    });
+  }, delay);
+}
 
 /**
  * Measure 297mm in pixels at current zoom/DPI by injecting a temporary ruler.
@@ -60,19 +82,16 @@ function checkOverflow() {
  * Update A4 status display and fix button label.
  */
 function updateA4Status() {
-  const statusEl  = document.getElementById("a4-status");
   const btnLabel  = document.getElementById("btn-fix-label");
   const fixBtn    = document.getElementById("btn-fix-overflow");
   const result    = checkOverflow();
 
   if (result.overflow) {
     const msg = `⚠️ 超出 A4 约 ${result.mmBeyond.toFixed(1)} mm`;
-    if (statusEl)  { statusEl.textContent = msg; statusEl.style.color = "#dc2626"; }
-    if (btnLabel)  btnLabel.textContent = "修复溢出";
+    if (btnLabel)  btnLabel.textContent = msg;
     if (fixBtn)    fixBtn.classList.add("toolbar-btn-warn");
   } else {
-    if (statusEl)  { statusEl.textContent = "✅ A4 排版正常"; statusEl.style.color = "#16a34a"; }
-    if (btnLabel)  btnLabel.textContent = "✅ A4 正常";
+    if (btnLabel)  btnLabel.textContent = "A4 正常";
     if (fixBtn)    fixBtn.classList.remove("toolbar-btn-warn");
   }
 }
@@ -143,7 +162,8 @@ function initOverflowDetection() {
 
   if (typeof ResizeObserver !== "undefined") {
     const observer = new ResizeObserver(() => {
-      requestAnimationFrame(updateA4Status);
+      if (_a4StatusSuspended) return;
+      scheduleA4Status(100);
     });
     observer.observe(contentEl);
   }

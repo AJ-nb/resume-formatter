@@ -8,18 +8,13 @@ const PHOTO_MAX_EDGE_PX = 1600;
 const PHOTO_TARGET_KB = 500;
 
 /**
- * Initialize photo upload, delete, scale, reset buttons.
+ * Initialize direct photo upload and delete interactions.
  */
 function initPhoto() {
-  const btnUpload = document.getElementById("btn-photo-upload");
-  const btnDelete = document.getElementById("btn-photo-delete");
-  const btnReset  = document.getElementById("btn-photo-reset");
-  const scaleInput = document.getElementById("photo-scale");
   const photoInput = document.getElementById("file-input-photo");
-  const controls = document.querySelector(".photo-controls");
+  const container = document.getElementById("photo-container");
 
-  if (btnUpload && photoInput) {
-    btnUpload.addEventListener("click", () => photoInput.click());
+  if (photoInput) {
     photoInput.addEventListener("change", (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
@@ -28,31 +23,19 @@ function initPhoto() {
     });
   }
 
-  if (btnDelete) {
-    btnDelete.addEventListener("click", () => {
-      const state = getState();
-      state.photo = { dataUrl: "", mimeType: "", originalWidth: 0, originalHeight: 0, scale: 1, offsetX: 0, offsetY: 0 };
-      renderPhoto(state);
-      updatePhotoControls();
+  if (container && photoInput) {
+    container.addEventListener("click", (event) => {
+      if (event.target.closest(".photo-delete-btn")) {
+        event.stopPropagation();
+        clearPhoto();
+      } else if (container.dataset.empty === "true") {
+        photoInput.click();
+      }
     });
-  }
-
-  if (scaleInput) {
-    scaleInput.addEventListener("input", () => {
-      const state = getState();
-      state.photo.scale = parseFloat(scaleInput.value);
-      applyPhotoTransform(state.photo);
-    });
-  }
-
-  if (btnReset) {
-    btnReset.addEventListener("click", () => {
-      const state = getState();
-      state.photo.scale = 1;
-      state.photo.offsetX = 0;
-      state.photo.offsetY = 0;
-      if (scaleInput) scaleInput.value = "1";
-      applyPhotoTransform(state.photo);
+    container.addEventListener("keydown", (event) => {
+      if (container.dataset.empty !== "true" || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      photoInput.click();
     });
   }
 
@@ -81,9 +64,7 @@ function handlePhotoFile(file) {
       const state = getState();
       state.photo = { dataUrl: compressed, mimeType, originalWidth: w, originalHeight: h, scale: 1, offsetX: 0, offsetY: 0 };
       renderPhoto(state);
-      updatePhotoControls();
-      const scaleInput = document.getElementById("photo-scale");
-      if (scaleInput) scaleInput.value = "1";
+      markDirty();
     });
   };
   reader.onerror = () => showToast("图片读取失败。", "error");
@@ -142,16 +123,11 @@ function applyPhotoTransform(photo) {
   img.style.transform = `translate(${photo.offsetX}px, ${photo.offsetY}px) scale(${photo.scale})`;
 }
 
-/**
- * Show or hide photo control buttons based on current state.
- */
-function updatePhotoControls() {
+function clearPhoto() {
   const state = getState();
-  const hasPhoto = !!(state.photo && state.photo.dataUrl);
-  const btnDelete = document.getElementById("btn-photo-delete");
-  const controls = document.querySelector(".photo-controls");
-  if (btnDelete) btnDelete.hidden = !hasPhoto;
-  if (controls) controls.hidden = !hasPhoto;
+  state.photo = { dataUrl: "", mimeType: "", originalWidth: 0, originalHeight: 0, scale: 1, offsetX: 0, offsetY: 0 };
+  renderPhoto(state);
+  markDirty();
 }
 
 /**
@@ -166,6 +142,7 @@ function initPhotoDrag() {
   let startOffsetX = 0, startOffsetY = 0;
 
   container.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".photo-delete-btn")) return;
     const img = container.querySelector("img");
     if (!img) return;
     e.preventDefault();
@@ -188,6 +165,9 @@ function initPhotoDrag() {
     applyPhotoTransform(state.photo);
   });
 
-  container.addEventListener("pointerup", () => { dragging = false; });
+  container.addEventListener("pointerup", () => {
+    if (dragging) markDirty();
+    dragging = false;
+  });
   container.addEventListener("pointercancel", () => { dragging = false; });
 }

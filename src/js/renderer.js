@@ -10,16 +10,18 @@
 function renderResume(state) {
   renderHeader(state);
   renderSections(state);
+  if (typeof applyLocalFormatting === "function") applyLocalFormatting(state);
   updateStatusInfo(state);
 }
 
 /**
  * Get current theme from #resume-page data-theme attribute.
- * @returns {"a"|"b"}
+ * @returns {"a"|"b"|"c"|"d"}
  */
 function getTheme() {
   const page = document.getElementById("resume-page");
-  return (page && page.dataset.theme === "b") ? "b" : "a";
+  const t = page && page.dataset.theme;
+  return (t === "b" || t === "c" || t === "d") ? t : "a";
 }
 
 /**
@@ -28,7 +30,6 @@ function getTheme() {
  */
 function renderHeader(state) {
   const { profile } = state;
-  const theme = getTheme();
 
   const nameEl = document.getElementById("profile-name");
   if (nameEl) {
@@ -49,31 +50,31 @@ function renderHeader(state) {
   const contactEl = document.getElementById("contact-info");
   if (contactEl) {
     contactEl.innerHTML = "";
-    const items = theme === "a"
-      ? [
-          profile.phone    && { field: "phone",     text: `联系电话：${profile.phone}` },
-          profile.email    && { field: "email",     text: `电子邮箱：${profile.email}` },
-          profile.location && { field: "location",  text: profile.location },
-          profile.website  && { field: "website",   text: profile.website },
-          profile.github   && { field: "github",    text: profile.github },
-          profile.portfolio&& { field: "portfolio", text: profile.portfolio },
-        ].filter(Boolean)
-      : [
-          profile.phone    && { field: "phone",     text: profile.phone },
-          profile.email    && { field: "email",     text: profile.email },
-          profile.location && { field: "location",  text: profile.location },
-          profile.website  && { field: "website",   text: profile.website },
-          profile.github   && { field: "github",    text: profile.github },
-          profile.portfolio&& { field: "portfolio", text: profile.portfolio },
-        ].filter(Boolean);
+    const items = [
+      profile.phone     && { field: "phone",     text: profile.phone },
+      profile.email     && { field: "email",     text: profile.email },
+      profile.portfolio && { field: "portfolio", text: profile.portfolio, link: true },
+    ].filter(Boolean);
 
-    items.forEach(({ field, text }) => {
-      const span = document.createElement("span");
-      span.className = "contact-item";
-      span.textContent = text;
-      span.dataset.profileField = field;
-      span.contentEditable = "plaintext-only";
-      contactEl.appendChild(span);
+    items.forEach(({ field, text, link }, index) => {
+      if (index > 0) {
+        const separator = document.createElement("span");
+        separator.className = "contact-separator";
+        separator.setAttribute("aria-hidden", "true");
+        separator.textContent = "｜";
+        contactEl.appendChild(separator);
+      }
+      const item = document.createElement(link ? "a" : "span");
+      item.className = `contact-item${link ? " contact-link" : ""}`;
+      item.textContent = text;
+      item.dataset.profileField = field;
+      item.contentEditable = "plaintext-only";
+      if (link) {
+        item.href = /^(?:https?:\/\/|mailto:)/i.test(text) ? text : `https://${text}`;
+        item.target = "_blank";
+        item.rel = "noopener noreferrer";
+      }
+      contactEl.appendChild(item);
     });
   }
 
@@ -192,9 +193,20 @@ function renderEntry(entry) {
 
   const dateLocSpan = document.createElement("span");
   dateLocSpan.className = "entry-date-location";
-  dateLocSpan.textContent = [entry.location, entry.date].filter(Boolean).join("  ");
-  dateLocSpan.contentEditable = "plaintext-only";
-  dateLocSpan.dataset.entryField = "date";
+
+  const locationSpan = document.createElement("span");
+  locationSpan.className = "entry-location";
+  locationSpan.textContent = entry.location || "";
+  locationSpan.contentEditable = "plaintext-only";
+  locationSpan.dataset.entryField = "location";
+  dateLocSpan.appendChild(locationSpan);
+
+  const dateSpan = document.createElement("span");
+  dateSpan.className = "entry-date";
+  dateSpan.textContent = entry.date || "";
+  dateSpan.contentEditable = "plaintext-only";
+  dateSpan.dataset.entryField = "date";
+  dateLocSpan.appendChild(dateSpan);
   headerEl.appendChild(dateLocSpan);
 
   // Delete entry button
@@ -233,6 +245,9 @@ function renderBulletRow(bullet) {
   span.className = "bullet-item";
   span.contentEditable = "plaintext-only";
   span.dataset.bulletId = bullet.id;
+  if (bullet.markerStyle && bullet.markerStyle !== "default") {
+    span.dataset.bulletMarker = bullet.markerStyle;
+  }
   span.appendChild(renderInlineContent(bullet.content));
   li.appendChild(span);
 
@@ -270,13 +285,22 @@ function renderAddBulletRow(entryId) {
 function renderInlineContent(tokens) {
   const frag = document.createDocumentFragment();
   for (const token of tokens) {
+    let node;
     if (token.type === "text") {
-      frag.appendChild(document.createTextNode(token.value));
+      node = document.createTextNode(token.value);
     } else if (token.type === "strong") {
       const strong = document.createElement("strong");
       strong.textContent = token.value;
-      frag.appendChild(strong);
+      node = strong;
     }
+    if (token.fontSizeDelta) {
+      const wrapper = node.nodeType === Node.ELEMENT_NODE ? node : document.createElement("span");
+      if (wrapper !== node) wrapper.appendChild(node);
+      wrapper.dataset.fontSizeDelta = String(token.fontSizeDelta);
+      wrapper.style.fontSize = `calc(1em + ${token.fontSizeDelta}pt)`;
+      node = wrapper;
+    }
+    if (node) frag.appendChild(node);
   }
   return frag;
 }
@@ -292,13 +316,21 @@ function renderPhoto(state) {
 
   const existingImg = container.querySelector("img");
   if (existingImg) existingImg.remove();
+  const existingDelete = container.querySelector(".photo-delete-btn");
+  if (existingDelete) existingDelete.remove();
 
   if (!photo.dataUrl) {
     container.dataset.empty = "true";
+    container.tabIndex = 0;
+    container.setAttribute("role", "button");
+    container.setAttribute("aria-label", "上传证件照");
     return;
   }
 
   container.dataset.empty = "false";
+  container.removeAttribute("tabindex");
+  container.removeAttribute("role");
+  container.removeAttribute("aria-label");
   const img = document.createElement("img");
   img.src = photo.dataUrl;
   img.style.width = `${container.clientWidth}px`;
@@ -306,6 +338,14 @@ function renderPhoto(state) {
   img.style.transform = `translate(${photo.offsetX}px, ${photo.offsetY}px) scale(${photo.scale})`;
   img.draggable = false;
   container.appendChild(img);
+
+  const deleteButton = document.createElement("button");
+  deleteButton.className = "photo-delete-btn no-print";
+  deleteButton.type = "button";
+  deleteButton.textContent = "×";
+  deleteButton.title = "删除照片";
+  deleteButton.setAttribute("aria-label", "删除照片");
+  container.appendChild(deleteButton);
 }
 
 /**
@@ -315,7 +355,9 @@ function renderPhoto(state) {
 function updateStatusInfo(state) {
   const nameEl = document.getElementById("current-filename");
   if (nameEl) {
-    nameEl.textContent = state.source.fileName || "未导入文件";
+    const fileName = state.source.fileName || "";
+    nameEl.textContent = fileName ? fileName.split("/").pop() : "未导入文件";
+    nameEl.title = fileName;
   }
 }
 
@@ -351,10 +393,11 @@ function updateAddGutter(state) {
       return;
     }
 
-    // Non-skills: entry add at bottom of section
-    const sectionRect = sectionEl.getBoundingClientRect();
+    // Entry-level add aligns with the section title, away from bullet-level adds.
+    const titleEl = sectionEl.querySelector(".section-title");
+    const titleRect = titleEl ? titleEl.getBoundingClientRect() : sectionEl.getBoundingClientRect();
     gutter.appendChild(makeGutterBtn(
-      sectionRect.bottom - gutterRect.top,
+      titleRect.top + titleRect.height / 2 - gutterRect.top,
       "+",
       `在「${section.title}」末尾新增条目`,
       () => addEntry(section.id)

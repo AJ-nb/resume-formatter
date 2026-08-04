@@ -9,57 +9,112 @@
 <body>
   <div id="app">
     <aside id="toolbar">
-      <div class="toolbar-group">
-        <span class="toolbar-label">风格：</span>
-        <button id="btn-theme-a" class="toolbar-btn toolbar-btn-active" title="风格 A：黑体">黑体</button>
-        <button id="btn-theme-b" class="toolbar-btn" title="风格 B：宋体">宋体</button>
+      <div class="toolbar-group toolbar-theme-group">
+        <span class="toolbar-label">风格</span>
+        <details class="toolbar-menu" id="theme-menu">
+          <summary class="toolbar-btn toolbar-select" title="选择简历风格">
+            <span id="current-theme-label">黑体</span>
+            <span class="toolbar-caret">⌄</span>
+          </summary>
+          <div class="toolbar-popover toolbar-theme-options">
+            <button id="btn-theme-a" class="toolbar-btn toolbar-btn-active" title="风格 A：黑体">黑体</button>
+            <button id="btn-theme-b" class="toolbar-btn" title="风格 B：宋体">宋体</button>
+            <button id="btn-theme-c" class="toolbar-btn" title="风格 C：思源宋体">思源</button>
+            <button id="btn-theme-d" class="toolbar-btn" title="风格 D：蓝黑学术简历">学术</button>
+          </div>
+        </details>
       </div>
-      <div class="toolbar-group">
+      <div class="toolbar-group toolbar-typesetting">
+        <div class="toolbar-global-controls">
+          <label class="toolbar-control">
+            <span>行高 <output id="line-height-value">1.40</output></span>
+            <input type="range" id="line-height-slider" class="toolbar-range" min="1.15" max="1.8" step="0.05" value="1.4" title="调整行高">
+          </label>
+          <label class="toolbar-control">
+            <span>字号 <output id="font-size-value">9pt</output></span>
+            <input type="range" id="font-size-slider" class="toolbar-range" min="7" max="12" step="0.1" value="9" title="调整正文字号">
+          </label>
+        </div>
+        <div class="selection-format-controls" aria-label="选区微调">
+          <span class="toolbar-label">选区</span>
+          <button id="btn-selection-bold" class="toolbar-icon-btn" title="加粗或取消加粗" disabled><strong>B</strong></button>
+          <button id="btn-selection-smaller" class="toolbar-icon-btn" title="选区字号缩小 0.5pt" disabled>A−</button>
+          <button id="btn-selection-larger" class="toolbar-icon-btn" title="选区字号增大 0.5pt" disabled>A+</button>
+          <button id="btn-selection-reset" class="toolbar-icon-btn" title="清除选区字号微调" aria-label="清除选区字号微调" disabled>↺</button>
+          <label class="selection-bullet-control" title="新增、取消或更换项目符号">
+            <span aria-hidden="true">•</span>
+            <select id="selection-bullet-style" class="toolbar-bullet-select" aria-label="项目符号" disabled>
+              <option value="default">跟随模板</option>
+              <option value="none">无项目符号</option>
+              <option value="disc">● 实心圆</option>
+              <option value="circle">○ 空心圆</option>
+              <option value="square">▪ 方块</option>
+              <option value="arrow">➤ 箭头</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <details class="toolbar-menu" id="import-menu">
+        <summary class="toolbar-btn toolbar-select toolbar-import-trigger" title="导入简历或复制格式转换 Prompt">
+          <span>导入与转换</span>
+          <span class="toolbar-caret">⌄</span>
+        </summary>
+        <div class="toolbar-popover toolbar-import-options">
+          <section class="panel-tool-section">
+            <h3>Markdown</h3>
+            <div class="panel-tool-actions">
+              <button id="btn-import-md" class="panel-action-btn" title="导入 .md 文件">导入</button>
+              <button id="btn-paste-md" class="panel-action-btn" title="粘贴 Markdown">粘贴</button>
+              <button id="btn-show-md-example" class="panel-action-btn" title="查看 Markdown 示例">示例</button>
+            </div>
+          </section>
+          <section class="panel-tool-section">
+            <h3>JSON</h3>
+            <div class="panel-tool-actions">
+              <button id="btn-import-json-file" class="panel-action-btn" title="导入 .json 文件">导入</button>
+              <button id="btn-paste-json" class="panel-action-btn" title="粘贴 JSON">粘贴</button>
+              <button id="btn-show-json-example" class="panel-action-btn" title="查看 JSON 示例">示例</button>
+            </div>
+          </section>
+          <section class="panel-tool-section panel-prompt-section">
+            <h3>复制转换 Prompt</h3>
+            <p>将 Prompt 和原简历交给支持文件读取的 AI，再导入返回结果。</p>
+            <div class="panel-prompt-row">
+              <span>PDF</span>
+              <button id="btn-copy-pdf-to-md" class="panel-action-btn" title="复制 PDF 转 Markdown Prompt">Markdown</button>
+              <button id="btn-copy-pdf-to-json" class="panel-action-btn" title="复制 PDF 转 JSON Prompt">JSON</button>
+            </div>
+            <div class="panel-prompt-row">
+              <span>Word</span>
+              <button id="btn-copy-docx-to-md" class="panel-action-btn" title="复制 DOCX 转 Markdown Prompt">Markdown</button>
+              <button id="btn-copy-docx-to-json" class="panel-action-btn" title="复制 DOCX 转 JSON Prompt">JSON</button>
+            </div>
+          </section>
+        </div>
+      </details>
+      <div class="toolbar-spacer"></div>
+      <div class="toolbar-info">
+        <div id="current-filename" class="info-item">未导入文件</div>
+        <div class="toolbar-status-line">
+          <span id="draft-status" class="info-item">—</span>
+        </div>
+      </div>
+      <div class="toolbar-group toolbar-primary-actions">
         <button id="btn-fix-overflow" class="toolbar-btn" title="检测到溢出时自动修复 A4 排版">
           <span class="btn-label" id="btn-fix-label">检查 A4</span>
         </button>
-        <span class="toolbar-label">行高</span>
-        <input type="range" id="line-height-slider" class="toolbar-range" min="1.15" max="1.8" step="0.05" value="1.4" title="调整行高">
-        <span id="line-height-value" class="toolbar-label">1.40</span>
-        <span class="toolbar-label" style="margin-left:6px">字号</span>
-        <input type="range" id="font-size-slider" class="toolbar-range" min="7" max="12" step="0.5" value="9" title="调整正文字号">
-        <span id="font-size-value" class="toolbar-label">9pt</span>
-        <button id="btn-restore-import" class="toolbar-btn" title="恢复最近一次导入的内容">
-          <span class="btn-icon">↩️</span>
-          <span class="btn-label">恢复导入内容</span>
-        </button>
-      </div>
-      <div class="toolbar-group">
-        <button id="btn-photo-upload" class="toolbar-btn" title="上传证件照">
-          <span class="btn-icon">🖼️</span>
-          <span class="btn-label">上传照片</span>
-        </button>
-        <button id="btn-photo-delete" class="toolbar-btn" hidden title="删除证件照">
-          <span class="btn-icon">🗑️</span>
-          <span class="btn-label">删除照片</span>
-        </button>
-        <div class="photo-controls" hidden>
-          <label class="toolbar-label">缩放</label>
-          <input type="range" id="photo-scale" class="toolbar-range" min="0.5" max="2" step="0.01" value="1">
-          <button id="btn-photo-reset" class="toolbar-btn" title="恢复照片默认位置">重置</button>
-        </div>
-      </div>
-      <div class="toolbar-group toolbar-group-right">
-        <button id="btn-save" class="toolbar-btn toolbar-btn-primary" title="保存到当前文件">
-          <span class="btn-label">保存</span>
-        </button>
-        <button id="btn-save-as" class="toolbar-btn" title="另存为新文件名">
-          <span class="btn-label">另存为</span>
+        <button id="btn-save" class="toolbar-btn toolbar-btn-primary" title="在右侧创建 Markdown 快照">
+          <span class="btn-label">保存快照</span>
         </button>
         <button id="btn-export-pdf" class="toolbar-btn" title="通过浏览器导出 PDF">
-          <span class="btn-icon">🖨️</span>
           <span class="btn-label">导出 PDF</span>
         </button>
-      </div>
-      <div class="toolbar-info">
-        <div id="current-filename" class="info-item">未导入文件</div>
-        <div id="draft-status" class="info-item">—</div>
-        <div id="a4-status" class="info-item">—</div>
+        <details class="toolbar-menu" id="more-menu">
+          <summary class="toolbar-btn toolbar-more-btn" title="更多操作" aria-label="更多操作">···</summary>
+          <div class="toolbar-popover toolbar-more-options">
+            <button id="btn-restore-import" class="toolbar-btn" title="恢复最近一次导入的内容">恢复导入内容</button>
+          </div>
+        </details>
       </div>
     </aside>
 
@@ -83,7 +138,6 @@
     <aside id="resume-list-panel">
       <div class="panel-header">
         <span id="panel-dir-name" class="panel-dir-name" title="">简历版本</span>
-        <button id="btn-import-md" class="panel-icon-btn" title="导入 MD 文件">📄</button>
         <button id="btn-pick-dir" class="panel-icon-btn" title="选择简历目录">📂</button>
         <button id="btn-refresh-dir" class="panel-icon-btn" title="刷新列表" hidden>↻</button>
       </div>
@@ -98,6 +152,8 @@
   </div>
 
   <input type="file" id="file-input-md" accept=".md" hidden>
+  <input type="file" id="file-input-directory" accept=".md,text/markdown" multiple hidden>
+  <input type="file" id="file-input-json" accept=".json,application/json" hidden>
   <input type="file" id="file-input-photo" accept="image/jpeg,image/png,image/webp" hidden>
 
   <!-- __SCRIPTS__ -->

@@ -4,6 +4,13 @@
  */
 
 let _dirty = false;
+let _formatTarget = null;
+let _formatRange = null;
+let _formatOffsets = null;
+let _formatBulletIds = [];
+const _undoStack = [];
+const UNDO_LIMIT = 100;
+let _lastInputHistory = null;
 
 function isDirty() { return _dirty; }
 
@@ -25,6 +32,24 @@ function clearDirty() {
 function initEditor() {
   const content = document.getElementById("resume-content");
   if (!content) return;
+
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z" && !e.shiftKey) {
+      if (e.target.matches("input, textarea, select") && !e.target.closest("#resume-content")) return;
+      e.preventDefault();
+      undoEditorChange();
+    }
+  }, true);
+
+  content.addEventListener("beforeinput", (e) => {
+    if (!e.target.closest("[contenteditable]") || e.inputType === "historyUndo") return;
+    const now = Date.now();
+    const key = e.target.dataset.bulletId || e.target.dataset.profileField || e.target.dataset.entryField || "editor";
+    const canMerge = _lastInputHistory && _lastInputHistory.key === key
+      && _lastInputHistory.type === e.inputType && now - _lastInputHistory.time < 800;
+    if (!canMerge) pushUndoState();
+    _lastInputHistory = { key, type: e.inputType, time: now };
+  });
 
   // Enter key: single-line fields blur; bullet Enter = new bullet below
   content.addEventListener("keydown", (e) => {
@@ -51,8 +76,11 @@ function initEditor() {
     syncElementToState(e.target);
   }, true);
 
-  // Mark dirty on input
-  content.addEventListener("input", () => markDirty());
+  // Keep state current while typing so selection formatting never uses stale text.
+  content.addEventListener("input", (e) => {
+    syncElementToState(e.target);
+    markDirty();
+  });
 
   content.addEventListener("click", (e) => {
     const btn = e.target.closest("button");
@@ -64,6 +92,252 @@ function initEditor() {
   });
 
   initSpacingHandles();
+  initSelectionFormatting();
+}
+
+function initSelectionFormatting() {
+  const buttons = {
+    bold: document.getElementById("btn-selection-bold"),
+    smaller: document.getElementById("btn-selection-smaller"),
+    larger: document.getElementById("btn-selection-larger"),
+    reset: document.getElementById("btn-selection-reset"),
+  };
+  const bulletStyle = document.getElementById("selection-bullet-style");
+
+  document.addEventListener("selectionchange", () => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    const node = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+    const target = node && node.closest && node.closest("#resume-content [contenteditable]");
+    const resume = document.getElementById("resume-content");
+    if (!resume || !resume.contains(range.commonAncestorContainer)) return;
+    const selectedBullets = Array.from(resume.querySelectorAll(".bullet-item[data-bullet-id]"))
+      .filter((item) => range.intersectsNode(item));
+    _formatBulletIds = selectedBullets.map((item) => item.dataset.bulletId);
+    if (bulletStyle) {
+      bulletStyle.disabled = _formatBulletIds.length === 0;
+      updateBulletStyleControl(bulletStyle);
+    }
+    if (!target || !target.contains(range.startContainer) || !target.contains(range.endContainer)) return;
+    _formatTarget = target;
+    _formatRange = range.cloneRange();
+    _formatOffsets = getSelectionOffsets(target, range);
+    Object.values(buttons).forEach((button) => { if (button) button.disabled = false; });
+    updateBoldButtonState(buttons.bold);
+  });
+
+  Object.values(buttons).forEach((button) => {
+    if (button) button.addEventListener("mousedown", (event) => event.preventDefault());
+  });
+  if (buttons.bold) buttons.bold.addEventListener("click", () => applySelectionFormat("bold"));
+  if (buttons.smaller) buttons.smaller.addEventListener("click", () => applySelectionFormat("size", -0.5));
+  if (buttons.larger) buttons.larger.addEventListener("click", () => applySelectionFormat("size", 0.5));
+  if (buttons.reset) buttons.reset.addEventListener("click", () => applySelectionFormat("reset"));
+  if (bulletStyle) bulletStyle.addEventListener("change", () => applyBulletStyle(bulletStyle.value));
+}
+
+function applyBulletStyle(markerStyle) {
+  if (_formatBulletIds.length === 0) return;
+  pushUndoState();
+  _formatBulletIds.forEach((id) => {
+    const bullet = findBulletById(id);
+    const element = document.querySelector(`.bullet-item[data-bullet-id="${CSS.escape(id)}"]`);
+    if (!bullet || !element) return;
+    if (markerStyle === "default") delete bullet.markerStyle;
+    else bullet.markerStyle = markerStyle;
+    if (markerStyle === "default") delete element.dataset.bulletMarker;
+    else element.dataset.bulletMarker = markerStyle;
+  });
+  markDirty();
+  requestAnimationFrame(() => updateA4Status());
+}
+
+function updateBulletStyleControl(control) {
+  const styles = _formatBulletIds.map((id) => findBulletById(id)?.markerStyle || "default");
+  control.value = styles.length > 0 && styles.every((style) => style === styles[0]) ? styles[0] : "default";
+}
+
+function pushUndoState() {
+  _undoStack.push(deepClone(getState()));
+  if (_undoStack.length > UNDO_LIMIT) _undoStack.shift();
+}
+
+function undoEditorChange() {
+  const previous = _undoStack.pop();
+  if (!previous) {
+    showToast("没有可撤回的操作。", "info");
+    return;
+  }
+  setState(previous);
+  renderResume(previous);
+  markDirty();
+  _formatTarget = null;
+  _formatRange = null;
+  _formatOffsets = null;
+  _formatBulletIds = [];
+  _lastInputHistory = null;
+  requestAnimationFrame(() => updateA4Status());
+}
+
+function applySelectionFormat(action, amount = 0) {
+  const target = _formatTarget;
+  if (!target || !document.contains(target)) return;
+  syncElementToState(target);
+  pushUndoState();
+
+  if (target.dataset.bulletId) {
+    const bullet = findBulletById(target.dataset.bulletId);
+    if (!bullet) return;
+    const offsets = _formatOffsets || getSelectionOffsets(target, _formatRange);
+    const start = offsets && offsets.start !== offsets.end ? offsets.start : 0;
+    const end = offsets && offsets.start !== offsets.end ? offsets.end : target.textContent.length;
+    const selected = splitTokensForRange(bullet.content, start, end);
+
+    if (action === "bold") {
+      const shouldUnbold = selected.some((part) => part.selected)
+        && selected.filter((part) => part.selected).every((part) => part.token.type === "strong");
+      selected.forEach((part) => {
+        if (part.selected) part.token.type = shouldUnbold ? "text" : "strong";
+      });
+    } else if (action === "size") {
+      selected.forEach((part) => {
+        if (part.selected) part.token.fontSizeDelta = clampFontDelta((part.token.fontSizeDelta || 0) + amount);
+      });
+    } else if (action === "reset") {
+      selected.forEach((part) => {
+        if (part.selected) delete part.token.fontSizeDelta;
+      });
+    }
+
+    bullet.content = mergeInlineTokens(selected.map((part) => part.token));
+    target.replaceChildren(renderInlineContent(bullet.content));
+  } else {
+    if (action === "bold") {
+      showToast("加粗适用于正文要点；姓名、公司和岗位保持模板字重。", "info");
+      return;
+    }
+    const key = getBlockFormatKey(target);
+    if (!key) return;
+    const state = getState();
+    if (!state.layout) state.layout = {};
+    if (!state.layout.blockFontSizeDelta) state.layout.blockFontSizeDelta = {};
+    if (action === "reset") {
+      delete state.layout.blockFontSizeDelta[key];
+    } else {
+      state.layout.blockFontSizeDelta[key] = clampFontDelta((state.layout.blockFontSizeDelta[key] || 0) + amount);
+    }
+    applyLocalFormatting(state);
+  }
+
+  markDirty();
+  updateBoldButtonState(document.getElementById("btn-selection-bold"));
+  requestAnimationFrame(() => updateA4Status());
+}
+
+function getSelectionOffsets(target, range) {
+  if (!range || !target.contains(range.startContainer) || !target.contains(range.endContainer)) return null;
+  const beforeStart = document.createRange();
+  beforeStart.selectNodeContents(target);
+  beforeStart.setEnd(range.startContainer, range.startOffset);
+  const beforeEnd = document.createRange();
+  beforeEnd.selectNodeContents(target);
+  beforeEnd.setEnd(range.endContainer, range.endOffset);
+  return { start: beforeStart.toString().length, end: beforeEnd.toString().length };
+}
+
+function splitTokensForRange(tokens, start, end) {
+  const result = [];
+  let offset = 0;
+  (tokens || []).forEach((token) => {
+    const value = token.value || "";
+    const tokenStart = offset;
+    const tokenEnd = offset + value.length;
+    const cuts = [0, Math.max(0, start - tokenStart), Math.min(value.length, end - tokenStart), value.length]
+      .filter((cut, index, values) => cut >= 0 && cut <= value.length && values.indexOf(cut) === index)
+      .sort((a, b) => a - b);
+    for (let i = 0; i < cuts.length - 1; i++) {
+      const from = cuts[i];
+      const to = cuts[i + 1];
+      if (from === to) continue;
+      result.push({
+        token: { ...token, value: value.slice(from, to) },
+        selected: tokenStart + from < end && tokenStart + to > start,
+      });
+    }
+    offset = tokenEnd;
+  });
+  return result;
+}
+
+function mergeInlineTokens(tokens) {
+  return tokens.reduce((merged, token) => {
+    if (!token.value) return merged;
+    const previous = merged[merged.length - 1];
+    if (previous && previous.type === token.type && (previous.fontSizeDelta || 0) === (token.fontSizeDelta || 0)) {
+      previous.value += token.value;
+    } else {
+      merged.push({ ...token });
+    }
+    return merged;
+  }, []);
+}
+
+function clampFontDelta(value) {
+  return Math.max(-2, Math.min(3, Math.round(value * 2) / 2));
+}
+
+function findBulletById(bulletId) {
+  for (const section of getState().sections) {
+    for (const entry of section.entries) {
+      const bullet = entry.bullets.find((item) => item.id === bulletId);
+      if (bullet) return bullet;
+    }
+  }
+  return null;
+}
+
+function getBlockFormatKey(target) {
+  if (target.dataset.profileField) return `profile:${target.dataset.profileField}`;
+  if (target.dataset.entryField) {
+    const entry = target.closest("[data-entry-id]");
+    return entry ? `entry:${entry.dataset.entryId}:${target.dataset.entryField}` : null;
+  }
+  return null;
+}
+
+function applyLocalFormatting(state) {
+  document.querySelectorAll("#resume-content [data-profile-field], #resume-content [data-entry-field]").forEach((element) => {
+    element.style.removeProperty("font-size");
+  });
+  const overrides = state.layout && state.layout.blockFontSizeDelta;
+  if (!overrides) return;
+  Object.entries(overrides).forEach(([key, delta]) => {
+    const [kind, id, field] = key.split(":");
+    const selector = kind === "profile"
+      ? `[data-profile-field="${CSS.escape(id)}"]`
+      : `[data-entry-id="${CSS.escape(id)}"] [data-entry-field="${CSS.escape(field)}"]`;
+    document.querySelectorAll(`#resume-content ${selector}`).forEach((element) => {
+      element.style.fontSize = `calc(1em + ${delta}pt)`;
+    });
+  });
+}
+
+function updateBoldButtonState(button) {
+  if (!button || !_formatTarget || !_formatTarget.dataset.bulletId) {
+    if (button) button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  const bullet = findBulletById(_formatTarget.dataset.bulletId);
+  const offsets = _formatOffsets || getSelectionOffsets(_formatTarget, _formatRange);
+  if (!bullet || !offsets || offsets.start === offsets.end) {
+    button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  const parts = splitTokensForRange(bullet.content, offsets.start, offsets.end).filter((part) => part.selected);
+  button.classList.toggle("toolbar-btn-active", parts.length > 0 && parts.every((part) => part.token.type === "strong"));
 }
 
 /** ========================
@@ -84,6 +358,7 @@ function addBulletAfter(bulletSpan) {
       if (idx === -1) continue;
 
       const newBullet = { id: generateId(), content: [{ type: "text", value: "" }] };
+      pushUndoState();
       entry.bullets.splice(idx + 1, 0, newBullet);
 
       // Re-render the bullets list
@@ -93,13 +368,13 @@ function addBulletAfter(bulletSpan) {
       if (listEl) {
         listEl.innerHTML = "";
         for (const b of entry.bullets) listEl.appendChild(renderBulletRow(b));
-        listEl.appendChild(renderAddBulletRow(entry.id));
         // Focus new bullet
         const newSpan = listEl.querySelector(`[data-bullet-id="${newBullet.id}"]`);
         if (newSpan) newSpan.focus();
       }
 
       markDirty();
+      requestAnimationFrame(() => updateAddGutter(state));
       return;
     }
   }
@@ -116,6 +391,7 @@ function addBullet(entryId) {
       if (entry.id !== entryId) continue;
 
       const newBullet = { id: generateId(), content: [{ type: "text", value: "" }] };
+      pushUndoState();
       entry.bullets.push(newBullet);
 
       const listEl = document.querySelector(
@@ -131,6 +407,7 @@ function addBullet(entryId) {
       }
 
       markDirty();
+      requestAnimationFrame(() => updateAddGutter(state));
       return;
     }
   }
@@ -146,10 +423,12 @@ function deleteBullet(bulletId) {
     for (const entry of section.entries) {
       const idx = entry.bullets.findIndex(b => b.id === bulletId);
       if (idx === -1) continue;
+      pushUndoState();
       entry.bullets.splice(idx, 1);
       const li = document.querySelector(`li[data-bullet-id="${bulletId}"]`);
       if (li) li.remove();
       markDirty();
+      requestAnimationFrame(() => updateAddGutter(state));
       return;
     }
   }
@@ -167,6 +446,7 @@ function addEntry(sectionId) {
   const state = getState();
   const section = state.sections.find(s => s.id === sectionId);
   if (!section) return;
+  pushUndoState();
 
   const newEntry = {
     id: generateId(),
@@ -188,6 +468,7 @@ function addEntry(sectionId) {
   }
 
   markDirty();
+  requestAnimationFrame(() => updateAddGutter(state));
 }
 
 /**
@@ -210,10 +491,12 @@ function deleteEntry(entryId) {
           text: "删除",
           primary: false,
           action: () => {
+            pushUndoState();
             section.entries.splice(idx, 1);
             const el = document.querySelector(`[data-entry-id="${entryId}"].resume-entry`);
             if (el) el.remove();
             markDirty();
+            requestAnimationFrame(() => updateAddGutter(state));
           },
         },
       ],
@@ -275,13 +558,34 @@ function syncElementToState(el) {
       for (const entry of section.entries) {
         for (const bullet of entry.bullets) {
           if (bullet.id === bulletId) {
-            bullet.content = [{ type: "text", value: raw }];
+            bullet.content = tokensFromEditableElement(el);
             return;
           }
         }
       }
     }
   }
+}
+
+function tokensFromEditableElement(element) {
+  const tokens = [];
+  const walk = (node, strong = false, inheritedDelta = 0) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!node.nodeValue) return;
+      tokens.push({
+        type: strong ? "strong" : "text",
+        value: node.nodeValue,
+        ...(inheritedDelta ? { fontSizeDelta: inheritedDelta } : {}),
+      });
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const nextStrong = strong || node.tagName === "STRONG" || node.tagName === "B";
+    const nextDelta = Number(node.dataset.fontSizeDelta || inheritedDelta || 0);
+    node.childNodes.forEach((child) => walk(child, nextStrong, nextDelta));
+  };
+  element.childNodes.forEach((node) => walk(node));
+  return mergeInlineTokens(tokens);
 }
 
 /** ========================

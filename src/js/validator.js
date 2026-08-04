@@ -150,7 +150,7 @@ function validateAndBuildState(parseResult, fileName) {
         }
       }
 
-      if (section.type !== "skills" && entry.bullets.length === 0) {
+      if (["experience", "projects"].includes(section.type) && entry.bullets.length === 0) {
         errors.push({
           level: "warning",
           code: "NO_BULLETS",
