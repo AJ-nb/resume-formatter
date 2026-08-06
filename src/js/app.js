@@ -71,29 +71,15 @@ function wireToolbar() {
   const fsSlider = document.getElementById("font-size-slider");
   const fsValue  = document.getElementById("font-size-value");
   if (fsSlider) {
-    let fontSizeFrame = 0;
-    let pendingFontSize = parseFloat(fsSlider.value);
-    const commitFontSize = () => {
-      fontSizeFrame = 0;
-      applyFontSize(pendingFontSize);
-    };
     fsSlider.addEventListener("input", () => {
       const pt = parseFloat(fsSlider.value);
-      if (fsValue) fsValue.textContent = `${Number.isInteger(pt) ? pt : pt.toFixed(1)}pt`;
-      pendingFontSize = pt;
-      if (!fontSizeFrame) fontSizeFrame = requestAnimationFrame(commitFontSize);
+      if (fsValue) fsValue.textContent = pt + "pt";
+      applyFontSize(pt);
       const state = getState();
       if (!state.layout) state.layout = {};
       state.layout.fontSize = pt;
       markDirty();
-    });
-    fsSlider.addEventListener("pointerdown", () => setA4StatusSuspended(true));
-    fsSlider.addEventListener("pointerup", () => setA4StatusSuspended(false));
-    fsSlider.addEventListener("pointercancel", () => setA4StatusSuspended(false));
-    fsSlider.addEventListener("change", () => {
-      if (fontSizeFrame) cancelAnimationFrame(fontSizeFrame);
-      commitFontSize();
-      scheduleA4Status();
+      requestAnimationFrame(() => updateA4Status());
     });
   }
   const lhSlider = document.getElementById("line-height-slider");
@@ -108,7 +94,7 @@ function wireToolbar() {
       if (!state.layout) state.layout = {};
       state.layout.lineHeight = lh;
       markDirty();
-      scheduleA4Status(80);
+      requestAnimationFrame(() => updateA4Status());
     });
   }
 
@@ -158,6 +144,10 @@ function handleImport(file, fileInput) {
       updateA4Status();
       clearDirty();
 
+      const infoMsg = validation.errors.find((err) => err.level === "info");
+      if (infoMsg) {
+        showToast(infoMsg.message, "success");
+      }
     } else {
       // Import had errors
       const errorMsgs = validation.errors
@@ -538,13 +528,10 @@ function saveMarkdownSnapshot(state, customName) {
   const baseName = sanitizeFileName(
     customName || state.resumeName || (state.source.fileName || "").replace(/\.md$/i, "") || "resume"
   ).replace(/\.md$/i, "");
-  const snapshotState = deepClone(state);
-  snapshotState.photo = { dataUrl: "", mimeType: "", originalWidth: 0, originalHeight: 0, scale: 1, offsetX: 0, offsetY: 0 };
   const snapshot = {
     id: generateId(),
     name: `${baseName}${customName ? "" : `-${timestamp}`}.md`,
     markdown: serializeStateToMarkdown(state),
-    resumeState: snapshotState,
     createdAt: now.toISOString(),
   };
   const snapshots = loadMarkdownSnapshots();
@@ -560,77 +547,6 @@ function deleteMarkdownSnapshot(snapshotId) {
   localStorage.setItem(MD_SNAPSHOTS_KEY, JSON.stringify(snapshots));
   if (_activeFile === `snapshot:${snapshotId}`) _activeFile = null;
   renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
-}
-
-function renameMarkdownSnapshot(snapshotId, requestedName) {
-  const newName = `${sanitizeFileName(requestedName).replace(/\.md$/i, "")}.md`;
-  const snapshots = loadMarkdownSnapshots();
-  const snapshot = snapshots.find((item) => item.id === snapshotId);
-  if (!snapshot || snapshot.name === newName) return;
-  if (snapshots.some((item) => item.id !== snapshotId && item.name.toLocaleLowerCase() === newName.toLocaleLowerCase())) {
-    throw new Error("已有同名快照");
-  }
-  snapshot.name = newName;
-  if (snapshot.resumeState && snapshot.resumeState.source) snapshot.resumeState.source.fileName = newName;
-  localStorage.setItem(MD_SNAPSHOTS_KEY, JSON.stringify(snapshots));
-  if (_activeFile === `snapshot:${snapshotId}`) {
-    const state = getState();
-    if (state.source) state.source.fileName = newName;
-    updateStatusInfo(state);
-  }
-  renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
-}
-
-async function renameDirectoryMarkdownFile(file, requestedName) {
-  if (!file.parentHandle) throw new Error("当前文件来源不支持重命名，请先选择其所在目录");
-  const newBaseName = `${sanitizeFileName(requestedName).replace(/\.md$/i, "")}.md`;
-  if (file.baseName === newBaseName) return;
-
-  for await (const [entryName] of file.parentHandle.entries()) {
-    if (entryName.toLocaleLowerCase() === newBaseName.toLocaleLowerCase()) {
-      throw new Error("同一目录中已有同名文件");
-    }
-  }
-
-  const source = await file.handle.getFile();
-  const targetHandle = await file.parentHandle.getFileHandle(newBaseName, { create: true });
-  try {
-    const writable = await targetHandle.createWritable();
-    await writable.write(await source.arrayBuffer());
-    await writable.close();
-  } catch (error) {
-    await file.parentHandle.removeEntry(newBaseName).catch(() => {});
-    throw error;
-  }
-  await file.parentHandle.removeEntry(file.baseName);
-
-  const oldVersionKey = `source:${file.name}`;
-  const newRelativeName = file.prefix ? `${file.prefix}/${newBaseName}` : newBaseName;
-  if (_activeFile === oldVersionKey) {
-    _activeFile = `source:${newRelativeName}`;
-    const state = getState();
-    if (state.source) state.source.fileName = newRelativeName;
-    updateStatusInfo(state);
-  }
-  await refreshResumeList();
-}
-
-function showRenameDialog({ name, onRename }) {
-  showInputDialog({
-    title: "重命名 Markdown",
-    message: "确认后将直接修改 .md 文件名：",
-    defaultValue: name.replace(/\.md$/i, ""),
-    confirmText: "重命名",
-    onSubmit: async (value) => {
-      try {
-        await onRename(value);
-        showToast("已重命名 Markdown 文件。", "success");
-      } catch (error) {
-        console.error("Rename failed:", error);
-        showToast(`重命名失败：${error.message}`, "error");
-      }
-    },
-  });
 }
 
 const IDB_NAME    = "resume-formatter";
@@ -714,7 +630,7 @@ function initResumeListPanel() {
         return;
       }
       try {
-        _dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+        _dirHandle = await window.showDirectoryPicker({ mode: "read" });
         await saveDirHandle(_dirHandle);
         await refreshResumeList();
       } catch (e) {
@@ -756,7 +672,7 @@ async function restoreDirHandle() {
 
   try {
     // Check current permission state
-    const perm = await handle.queryPermission({ mode: "readwrite" });
+    const perm = await handle.queryPermission({ mode: "read" });
 
     if (perm === "granted") {
       _dirHandle = handle;
@@ -798,7 +714,7 @@ function showReauthNotice(handle) {
     if (btnReauth) {
       btnReauth.addEventListener("click", async () => {
         try {
-          const perm = await handle.requestPermission({ mode: "readwrite" });
+          const perm = await handle.requestPermission({ mode: "read" });
           if (perm === "granted") {
             _dirHandle = handle;
             await refreshResumeList();
@@ -865,26 +781,13 @@ function renderResumeFileList(files, directoryName, canRefresh) {
     for (const snapshot of snapshots) {
       const versionKey = `snapshot:${snapshot.id}`;
       const li = document.createElement("li");
-      li.className = "resume-list-item resume-list-row resume-list-snapshot" + (versionKey === _activeFile ? " active" : "");
+      li.className = "resume-list-item resume-list-snapshot" + (versionKey === _activeFile ? " active" : "");
       li.title = snapshot.name;
       li.dataset.versionKey = versionKey;
 
       const label = document.createElement("span");
       label.textContent = snapshot.name.replace(/\.md$/i, "");
       li.appendChild(label);
-
-      const renameButton = document.createElement("button");
-      renameButton.className = "resume-list-action resume-list-rename";
-      renameButton.textContent = "重命名";
-      renameButton.title = "重命名 Markdown 快照";
-      renameButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        showRenameDialog({
-          name: snapshot.name,
-          onRename: (value) => renameMarkdownSnapshot(snapshot.id, value),
-        });
-      });
-      li.appendChild(renameButton);
 
       const deleteButton = document.createElement("button");
       deleteButton.className = "resume-list-delete";
@@ -906,34 +809,18 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const handle = {
         getFile: async () => new File([snapshot.markdown], snapshot.name, { type: "text/markdown" }),
       };
-      li.addEventListener("click", () => loadResumeFromHandle(snapshot.name, handle, versionKey, snapshot.resumeState));
+      li.addEventListener("click", () => loadResumeFromHandle(snapshot.name, handle, versionKey));
       list.appendChild(li);
     }
 
     if (sourceFiles.length > 0) appendHeading("目录文件");
-    for (const file of sourceFiles) {
-      const { name, handle } = file;
+    for (const { name, handle } of sourceFiles) {
       const versionKey = `source:${name}`;
       const li = document.createElement("li");
-      li.className = "resume-list-item resume-list-row" + (versionKey === _activeFile ? " active" : "");
+      li.className = "resume-list-item" + (versionKey === _activeFile ? " active" : "");
+      li.textContent = name.replace(/\.md$/i, "");
       li.title = name;
       li.dataset.versionKey = versionKey;
-
-      const label = document.createElement("span");
-      label.textContent = (file.baseName || name.split("/").pop()).replace(/\.md$/i, "");
-      li.appendChild(label);
-
-      if (file.parentHandle) {
-        const renameButton = document.createElement("button");
-        renameButton.className = "resume-list-action resume-list-rename";
-        renameButton.textContent = "重命名";
-        renameButton.title = "重命名真实 Markdown 文件";
-        renameButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          showRenameDialog({ name: file.baseName, onRename: (value) => renameDirectoryMarkdownFile(file, value) });
-        });
-        li.appendChild(renameButton);
-      }
       li.addEventListener("click", () => loadResumeFromHandle(name, handle, versionKey));
       list.appendChild(li);
     }
@@ -950,14 +837,14 @@ function renderResumeFileList(files, directoryName, canRefresh) {
  * Recursively collect Markdown files from a directory.
  * @param {FileSystemDirectoryHandle} directory
  * @param {string} prefix
- * @param {Array<{name:string, baseName:string, prefix:string, handle:FileSystemFileHandle, parentHandle:FileSystemDirectoryHandle}>} files
+ * @param {Array<{name:string, handle:FileSystemFileHandle}>} files
  */
 async function collectMarkdownFiles(directory, prefix, files) {
   for await (const [name, handle] of directory.entries()) {
     if (name.startsWith(".")) continue;
     const relativeName = prefix ? `${prefix}/${name}` : name;
     if (handle.kind === "file" && /\.md$/i.test(name)) {
-      files.push({ name: relativeName, baseName: name, prefix, handle, parentHandle: directory });
+      files.push({ name: relativeName, handle });
     } else if (handle.kind === "directory") {
       await collectMarkdownFiles(handle, relativeName, files);
     }
@@ -969,7 +856,7 @@ async function collectMarkdownFiles(directory, prefix, files) {
  * @param {string} name
  * @param {FileSystemFileHandle} handle
  */
-async function loadResumeFromHandle(name, handle, versionKey = name, savedState = null) {
+async function loadResumeFromHandle(name, handle, versionKey = name) {
   // Warn if dirty
   if (isDirty()) {
     const confirmed = await new Promise((resolve) => {
@@ -986,16 +873,11 @@ async function loadResumeFromHandle(name, handle, versionKey = name, savedState 
   }
 
   try {
-    let validation;
-    if (savedState) {
-      validation = { state: deepClone(savedState), errors: [] };
-      validation.state.source.fileName = name;
-    } else {
-      const file = await handle.getFile();
-      const text = await file.text();
-      const parseResult = parseMarkdown(text);
-      validation = validateAndBuildState(parseResult, name);
-    }
+    const file = await handle.getFile();
+    const text = await file.text();
+
+    const parseResult = parseMarkdown(text);
+    const validation  = validateAndBuildState(parseResult, name);
 
     if (validation.state) {
       setState(validation.state);
@@ -1009,6 +891,8 @@ async function loadResumeFromHandle(name, handle, versionKey = name, savedState 
         li.classList.toggle("active", li.dataset.versionKey === versionKey);
       });
 
+      const info = validation.errors.find((e) => e.level === "info");
+      if (info) showToast(info.message, "success");
     } else {
       const errs = validation.errors
         .filter((e) => e.level === "error")
@@ -1074,13 +958,6 @@ function initToolbarMenus() {
   if (moreMenu) {
     moreMenu.querySelectorAll("button").forEach((button) => {
       button.addEventListener("click", () => { moreMenu.open = false; });
-    });
-  }
-
-  const importMenu = document.getElementById("import-menu");
-  if (importMenu) {
-    importMenu.querySelectorAll("button").forEach((button) => {
-      button.addEventListener("click", () => { importMenu.open = false; });
     });
   }
 
@@ -1223,6 +1100,12 @@ function handlePasteMarkdown() {
         renderResume(validation.state);
         updateA4Status();
         clearDirty();
+        const infoMsg = validation.errors.find((err) => err.level === "info");
+        if (infoMsg) {
+          showToast(infoMsg.message, "success");
+        } else {
+          showToast("已导入：粘贴的 Markdown", "success");
+        }
       } else {
         const errorMsgs = validation.errors
           .filter((err) => err.level === "error")
@@ -1534,6 +1417,12 @@ function handleJsonImportResult(result, fileName, rawJson) {
     updateA4Status();
     clearDirty();
 
+    const infoMsg = result.errors.find((err) => err.level === "info");
+    if (infoMsg) {
+      showToast(infoMsg.message, "success");
+    } else {
+      showToast("已导入：" + fileName, "success");
+    }
   } else {
     const errorMsgs = result.errors
       .filter((err) => err.level === "error")
