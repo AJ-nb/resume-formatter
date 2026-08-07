@@ -182,7 +182,7 @@ function applyFontSize(pt) {
   if (!page) return;
   const r = pt / 9; // ratio relative to 9pt baseline
   page.style.setProperty("--font-size-body",          pt + "pt");
-  page.style.setProperty("--font-size-small",          (pt * 0.944).toFixed(2) + "pt");
+  page.style.setProperty("--font-size-small",          (pt * 1.056).toFixed(2) + "pt");
   page.style.setProperty("--font-size-entry-name",     (pt * 1.056).toFixed(2) + "pt");
   page.style.setProperty("--font-size-section-title",  (pt * 1.167).toFixed(2) + "pt");
   page.style.setProperty("--font-size-contact",        pt + "pt");
