@@ -67,7 +67,7 @@
   --page-padding-top: 7mm; --page-padding-bottom: 7mm;
   --page-padding-left: 10mm; --page-padding-right: 10mm;
   --section-gap: 1.5mm; --entry-gap: 1mm; --bullet-gap: 0.2mm;
-  --font-size-body: 9pt; --font-size-small: 8.5pt; --font-size-section-title: 10.5pt;
+  --font-size-body: 9pt; --font-size-small: 9.5pt; --font-size-section-title: 10.5pt;
   --font-size-entry-name: 9.5pt; --font-size-contact: 9pt; --font-size-headline: 13pt;
   --color-text: #1a1a1a; --color-muted: #4a4a4a; --color-divider: #1a1a1a; --photo-w: 26mm; --photo-h: 35mm;
 }
@@ -154,7 +154,7 @@
   --page-padding-top: 6mm; --page-padding-bottom: 6mm;
   --page-padding-left: 12mm; --page-padding-right: 12mm;
   --section-gap: 0.8mm; --entry-gap: 0.5mm; --bullet-gap: 0.1mm;
-  --font-size-body: 9pt; --font-size-small: 8.5pt; --font-size-name: 17pt;
+  --font-size-body: 9pt; --font-size-small: 9.5pt; --font-size-name: 17pt;
   --font-size-section-title: 10.5pt; --font-size-entry-name: 9.5pt; --font-size-contact: 9pt;
   --color-text: #1a1a1a; --color-muted: #555; --color-divider: #1a1a1a; --photo-w: 24mm; --photo-h: 34mm;
 }
@@ -240,7 +240,7 @@
   --page-padding-top: 6mm; --page-padding-bottom: 6mm;
   --page-padding-left: 12mm; --page-padding-right: 12mm;
   --section-gap: 0.8mm; --entry-gap: 0.5mm; --bullet-gap: 0.1mm;
-  --font-size-body: 9pt; --font-size-small: 8.5pt; --font-size-name: 17pt;
+  --font-size-body: 9pt; --font-size-small: 9.5pt; --font-size-name: 17pt;
   --font-size-section-title: 10.5pt; --font-size-entry-name: 9.5pt; --font-size-contact: 9pt;
   --color-text: #1a1a1a; --color-muted: #555; --color-divider: #1a1a1a; --photo-w: 24mm; --photo-h: 34mm;
 }
@@ -326,7 +326,7 @@
   --page-padding-top: 7mm; --page-padding-bottom: 6mm;
   --page-padding-left: 16mm; --page-padding-right: 14mm;
   --section-gap: 0.6mm; --entry-gap: 0.35mm; --bullet-gap: 0.05mm;
-  --font-size-body: 8.2pt; --font-size-small: 8pt; --font-size-name: 15.5pt;
+  --font-size-body: 8.2pt; --font-size-small: 8.5pt; --font-size-name: 15.5pt;
   --font-size-section-title: 10.5pt; --font-size-entry-name: 8.5pt; --font-size-contact: 8pt;
   --color-text: #111; --color-muted: #333; --color-academic: #123f73;
   --color-divider: #171717; --photo-w: 18mm; --photo-h: 25mm;
