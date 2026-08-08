@@ -15,6 +15,7 @@ function serializeStateToMarkdown(state) {
     ["resume_name", state.resumeName],
     ["name", state.profile.name],
     ["headline", state.profile.headline],
+    ["location", state.profile.location],
     ["phone", state.profile.phone],
     ["email", state.profile.email],
     ["website", state.profile.website],
@@ -42,6 +43,7 @@ function serializeStateToMarkdown(state) {
         lines.push(`### ${cleanScalar(entry.name)}`);
         if (entry.role) lines.push(`role: ${cleanScalar(entry.role)}`);
         if (entry.date) lines.push(`date: ${cleanScalar(entry.date)}`);
+        if (entry.location) lines.push(`location: ${cleanScalar(entry.location)}`);
         lines.push("");
       }
 

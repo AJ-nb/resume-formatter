@@ -129,8 +129,12 @@ function autoFixOverflow() {
   if (!result.overflow) return;
 
   const state = getState();
-  const DEFAULT_SPACING = 2;
-  const MAX_ITER = 8;
+  const DEFAULT_SPACING = 0;
+  const lineHeightInput = document.getElementById("line-height-slider");
+  const minLineHeight = Number(lineHeightInput && lineHeightInput.min) || 1.15;
+  const lineHeightStep = Number(lineHeightInput && lineHeightInput.step) || 0.01;
+  const MAX_ITER = 200;
+  let changed = false;
 
   for (let i = 0; i < MAX_ITER && result.overflow; i++) {
     const sections = state.sections;
@@ -143,29 +147,62 @@ function autoFixOverflow() {
       // Reduce section spacings proportionally (with 15% buffer)
       const target = Math.max(0, totalSpacing - result.mmBeyond * 1.15);
       const factor = target / totalSpacing;
+      let spacingChanged = false;
       sections.forEach(s => {
         const cur = s.spacingBefore !== undefined ? s.spacingBefore : DEFAULT_SPACING;
-        if (cur > 0) s.spacingBefore = Math.round(cur * factor * 10) / 10;
+        if (cur > 0) {
+          const next = Math.max(0, Math.round(cur * factor * 10) / 10);
+          if (next !== cur) {
+            s.spacingBefore = next;
+            spacingChanged = true;
+            changed = true;
+          }
+        }
       });
+
+      // Rounding must not leave the loop repeatedly measuring identical layout.
+      if (!spacingChanged) {
+        const section = sections.find(s =>
+          (s.spacingBefore !== undefined ? s.spacingBefore : DEFAULT_SPACING) > 0
+        );
+        if (section) {
+          const cur = section.spacingBefore !== undefined ? section.spacingBefore : DEFAULT_SPACING;
+          section.spacingBefore = Math.max(0, Math.round((cur - 0.1) * 10) / 10);
+          changed = true;
+        }
+      }
+
+      // Apply the actual spacing values before measuring the next iteration.
+      renderSections(state);
     } else {
       // Spacings exhausted — shrink line-height stored in state.layout
       if (!state.layout) state.layout = {};
-      const curLH = state.layout.lineHeight || 1.57;
-      state.layout.lineHeight = Math.max(1.15, curLH - 0.05);
-      if (typeof applyLineHeight === "function") applyLineHeight(state.layout.lineHeight);
+      const curLH = Number(state.layout.lineHeight) || 1.57;
+      const nextLH = Math.max(
+        minLineHeight,
+        Math.round((curLH - lineHeightStep) * 100) / 100
+      );
+      if (nextLH >= curLH) break;
+      state.layout.lineHeight = nextLH;
+      changed = true;
+      if (typeof applyLineHeight === "function") applyLineHeight(nextLH);
     }
 
-    // Re-render sections to apply new spacingBefore values
-    renderSections(state);
-
     // Force reflow then re-measure
-    document.getElementById("resume-content").offsetHeight; // eslint-disable-line no-unused-expressions
+    const contentEl = document.getElementById("resume-content");
+    if (contentEl) contentEl.offsetHeight; // eslint-disable-line no-unused-expressions
     result = checkOverflow();
   }
 
   if (typeof applyLayoutState === "function") applyLayoutState(state);
   updateA4Status();
-  if (typeof markDirty === "function") markDirty();
+  if (changed && typeof markDirty === "function") markDirty();
+
+  if (result.overflow) {
+    showToast(`仍超出约 ${result.mmBeyond.toFixed(1)} mm，视觉参数已到可读下限。`, "warning");
+  } else {
+    showToast("已自动修复，A4 排版正常。", "success");
+  }
 }
 
 /**
