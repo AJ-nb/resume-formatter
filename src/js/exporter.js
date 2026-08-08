@@ -15,7 +15,6 @@ function serializeStateToMarkdown(state) {
     ["resume_name", state.resumeName],
     ["name", state.profile.name],
     ["headline", state.profile.headline],
-    ["location", state.profile.location],
     ["phone", state.profile.phone],
     ["email", state.profile.email],
     ["website", state.profile.website],
@@ -43,7 +42,6 @@ function serializeStateToMarkdown(state) {
         lines.push(`### ${cleanScalar(entry.name)}`);
         if (entry.role) lines.push(`role: ${cleanScalar(entry.role)}`);
         if (entry.date) lines.push(`date: ${cleanScalar(entry.date)}`);
-        if (entry.location) lines.push(`location: ${cleanScalar(entry.location)}`);
         lines.push("");
       }
 
@@ -64,7 +62,9 @@ function serializeStateToMarkdown(state) {
 function serializeInlineMarkdown(tokens) {
   return (tokens || []).map((token) => {
     const value = String(token.value || "").replace(/[\r\n]+/g, " ");
-    return token.type === "strong" ? `**${value}**` : value;
+    if (token.type === "strong" && token.italic) return `***${value}***`;
+    if (token.type === "strong") return `**${value}**`;
+    return token.italic ? `*${value}*` : value;
   }).join("");
 }
 
@@ -194,5 +194,6 @@ function downloadFile(content, fileName, mimeType) {
  * Export PDF via browser print.
  */
 function exportPdf() {
+  if (typeof preparePhotoForPrint === "function") preparePhotoForPrint();
   window.print();
 }

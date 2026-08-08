@@ -8,11 +8,18 @@ const PHOTO_MAX_EDGE_PX = 1600;
 const PHOTO_TARGET_KB = 500;
 
 /**
- * Initialize direct photo upload and delete interactions.
+ * Initialize photo upload, crop controls, frame movement, and frame sizing.
  */
 function initPhoto() {
+  const btnUpload = document.getElementById("btn-photo-upload");
+  const btnDelete = document.getElementById("btn-photo-delete");
+  const btnReset = document.getElementById("btn-photo-reset");
+  const scaleInput = document.getElementById("photo-scale");
+  const sizeInput = document.getElementById("photo-size-slider");
   const photoInput = document.getElementById("file-input-photo");
   const container = document.getElementById("photo-container");
+
+  if (btnUpload && photoInput) btnUpload.addEventListener("click", () => photoInput.click());
 
   if (photoInput) {
     photoInput.addEventListener("change", (e) => {
@@ -23,11 +30,50 @@ function initPhoto() {
     });
   }
 
+  if (btnDelete) btnDelete.addEventListener("click", clearPhoto);
+
+  if (scaleInput) {
+    scaleInput.addEventListener("input", () => {
+      const state = getState();
+      state.photo.scale = parseFloat(scaleInput.value);
+      applyPhotoTransform(state.photo);
+      markDirty();
+    });
+  }
+
+  if (btnReset) {
+    btnReset.addEventListener("click", () => {
+      const state = getState();
+      state.photo.scale = 1;
+      state.photo.frameOffsetX = 0;
+      state.photo.frameOffsetY = 0;
+      state.photo.offsetX = 0;
+      state.photo.offsetY = 0;
+      if (scaleInput) scaleInput.value = "1";
+      applyPhotoFramePosition(state.photo);
+      applyPhotoTransform(state.photo);
+      markDirty();
+    });
+  }
+
+  if (sizeInput) {
+    sizeInput.addEventListener("input", () => {
+      const state = getState();
+      state.photo.frameScale = parseFloat(sizeInput.value) / 100;
+      applyPhotoFrameSize(state.photo);
+      renderPhoto(state);
+      markDirty();
+      requestAnimationFrame(() => updateA4Status());
+    });
+  }
+
   if (container && photoInput) {
     container.addEventListener("click", (event) => {
       if (event.target.closest(".photo-delete-btn")) {
         event.stopPropagation();
         clearPhoto();
+      } else if (event.target.closest(".photo-frame-handle")) {
+        event.stopPropagation();
       } else if (container.dataset.empty === "true") {
         photoInput.click();
       }
@@ -40,6 +86,10 @@ function initPhoto() {
   }
 
   initPhotoDrag();
+  initPhotoFrameDrag();
+  updatePhotoControls();
+  applyPhotoFrameSize(getState().photo);
+  applyPhotoFramePosition(getState().photo);
 }
 
 /**
@@ -62,8 +112,15 @@ function handlePhotoFile(file) {
     const dataUrl = e.target.result;
     compressPhoto(dataUrl, file.type, (compressed, mimeType, w, h) => {
       const state = getState();
-      state.photo = { dataUrl: compressed, mimeType, originalWidth: w, originalHeight: h, scale: 1, offsetX: 0, offsetY: 0 };
+      const frameScale = state.photo && state.photo.frameScale ? state.photo.frameScale : 1;
+      const frameOffsetX = Number(state.photo && state.photo.frameOffsetX) || 0;
+      const frameOffsetY = Number(state.photo && state.photo.frameOffsetY) || 0;
+      state.photo = {
+        dataUrl: compressed, mimeType, originalWidth: w, originalHeight: h,
+        scale: 1, frameScale, frameOffsetX, frameOffsetY, offsetX: 0, offsetY: 0,
+      };
       renderPhoto(state);
+      updatePhotoControls();
       markDirty();
     });
   };
@@ -120,13 +177,76 @@ function applyPhotoTransform(photo) {
   if (!container) return;
   const img = container.querySelector("img");
   if (!img) return;
-  img.style.transform = `translate(${photo.offsetX}px, ${photo.offsetY}px) scale(${photo.scale})`;
+  const offsetX = pxToMm(Number(photo && photo.offsetX) || 0);
+  const offsetY = pxToMm(Number(photo && photo.offsetY) || 0);
+  const scale = Math.max(0.1, Number(photo && photo.scale) || 1);
+  img.style.setProperty("--photo-image-offset-x", `${offsetX.toFixed(4)}mm`);
+  img.style.setProperty("--photo-image-offset-y", `${offsetY.toFixed(4)}mm`);
+  img.style.setProperty("--photo-image-scale", String(scale));
+}
+
+function applyPhotoFrameSize(photo) {
+  const page = document.getElementById("resume-page");
+  if (!page) return;
+  const baseWidth = 20.1;
+  const baseHeight = 24.4;
+  const frameScale = Math.max(0.4, Math.min(2, Number(photo && photo.frameScale) || 1));
+  page.style.setProperty("--photo-w", `${(baseWidth * frameScale).toFixed(2)}mm`);
+  page.style.setProperty("--photo-h", `${(baseHeight * frameScale).toFixed(2)}mm`);
+
+  const input = document.getElementById("photo-size-slider");
+  const output = document.getElementById("photo-size-value");
+  const percent = Math.round(frameScale * 100);
+  if (input) input.value = String(percent);
+  if (output) output.textContent = `${percent}%`;
+}
+
+function applyPhotoFramePosition(photo) {
+  const page = document.getElementById("resume-page");
+  if (!page) return;
+  const x = Number(photo && photo.frameOffsetX) || 0;
+  const y = Number(photo && photo.frameOffsetY) || 0;
+  page.style.setProperty("--photo-frame-offset-x", `${x}mm`);
+  page.style.setProperty("--photo-frame-offset-y", `${y}mm`);
+}
+
+/** Freeze the on-screen photo frame geometry for the print layout. */
+function preparePhotoForPrint() {
+  const page = document.getElementById("resume-page");
+  const container = document.getElementById("photo-container");
+  if (!page || !container || container.dataset.empty === "true") return;
+
+  const pageRect = page.getBoundingClientRect();
+  const frameRect = container.getBoundingClientRect();
+  page.classList.add("photo-print-prepared");
+  page.style.setProperty("--photo-print-x", `${pxToMm(frameRect.left - pageRect.left).toFixed(4)}mm`);
+  page.style.setProperty("--photo-print-y", `${pxToMm(frameRect.top - pageRect.top).toFixed(4)}mm`);
+  page.style.setProperty("--photo-print-w", `${pxToMm(frameRect.width).toFixed(4)}mm`);
+  page.style.setProperty("--photo-print-h", `${pxToMm(frameRect.height).toFixed(4)}mm`);
+}
+
+function updatePhotoControls() {
+  const state = getState();
+  const hasPhoto = !!(state.photo && state.photo.dataUrl);
+  const btnDelete = document.getElementById("btn-photo-delete");
+  const controls = document.querySelector(".photo-controls");
+  const scaleInput = document.getElementById("photo-scale");
+  if (btnDelete) btnDelete.hidden = !hasPhoto;
+  if (controls) controls.hidden = !hasPhoto;
+  if (scaleInput) scaleInput.value = String((state.photo && state.photo.scale) || 1);
 }
 
 function clearPhoto() {
   const state = getState();
-  state.photo = { dataUrl: "", mimeType: "", originalWidth: 0, originalHeight: 0, scale: 1, offsetX: 0, offsetY: 0 };
+  const frameScale = state.photo && state.photo.frameScale ? state.photo.frameScale : 1;
+  const frameOffsetX = Number(state.photo && state.photo.frameOffsetX) || 0;
+  const frameOffsetY = Number(state.photo && state.photo.frameOffsetY) || 0;
+  state.photo = {
+    dataUrl: "", mimeType: "", originalWidth: 0, originalHeight: 0,
+    scale: 1, frameScale, frameOffsetX, frameOffsetY, offsetX: 0, offsetY: 0,
+  };
   renderPhoto(state);
+  updatePhotoControls();
   markDirty();
 }
 
@@ -142,7 +262,7 @@ function initPhotoDrag() {
   let startOffsetX = 0, startOffsetY = 0;
 
   container.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".photo-delete-btn")) return;
+    if (e.target.closest(".photo-delete-btn, .photo-frame-handle")) return;
     const img = container.querySelector("img");
     if (!img) return;
     e.preventDefault();
@@ -170,4 +290,76 @@ function initPhotoDrag() {
     dragging = false;
   });
   container.addEventListener("pointercancel", () => { dragging = false; });
+}
+
+/** Move the entire photo frame without changing its internal crop. */
+function initPhotoFrameDrag() {
+  const container = document.getElementById("photo-container");
+  if (!container) return;
+
+  let dragging = false;
+  let startX = 0, startY = 0;
+  let startOffsetX = 0, startOffsetY = 0;
+  let pxPerMm = 1;
+
+  container.addEventListener("pointerdown", (event) => {
+    const handle = event.target.closest(".photo-frame-handle");
+    if (!handle || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const photo = getState().photo;
+    dragging = true;
+    startX = event.clientX;
+    startY = event.clientY;
+    startOffsetX = Number(photo.frameOffsetX) || 0;
+    startOffsetY = Number(photo.frameOffsetY) || 0;
+    pxPerMm = getPxPerMm();
+    handle.classList.add("dragging");
+    handle.setPointerCapture(event.pointerId);
+  });
+
+  container.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const photo = getState().photo;
+    photo.frameOffsetX = Math.round((startOffsetX + (event.clientX - startX) / pxPerMm) * 2) / 2;
+    photo.frameOffsetY = Math.round((startOffsetY + (event.clientY - startY) / pxPerMm) * 2) / 2;
+    applyPhotoFramePosition(photo);
+  });
+
+  const finishDrag = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    const handle = event && event.target.closest(".photo-frame-handle");
+    if (handle) handle.classList.remove("dragging");
+    markDirty();
+    updateA4Status();
+  };
+  container.addEventListener("pointerup", finishDrag);
+  container.addEventListener("pointercancel", finishDrag);
+
+  container.addEventListener("dblclick", (event) => {
+    if (!event.target.closest(".photo-frame-handle")) return;
+    event.preventDefault();
+    const photo = getState().photo;
+    photo.frameOffsetX = 0;
+    photo.frameOffsetY = 0;
+    applyPhotoFramePosition(photo);
+    markDirty();
+  });
+
+  container.addEventListener("keydown", (event) => {
+    if (!event.target.closest(".photo-frame-handle") || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    const photo = getState().photo;
+    const amount = event.shiftKey ? 2 : 0.5;
+    if (event.key === "Home") {
+      photo.frameOffsetX = 0;
+      photo.frameOffsetY = 0;
+    } else {
+      photo.frameOffsetX = (Number(photo.frameOffsetX) || 0) + (event.key === "ArrowLeft" ? -amount : event.key === "ArrowRight" ? amount : 0);
+      photo.frameOffsetY = (Number(photo.frameOffsetY) || 0) + (event.key === "ArrowUp" ? -amount : event.key === "ArrowDown" ? amount : 0);
+    }
+    applyPhotoFramePosition(photo);
+    markDirty();
+  });
 }

@@ -17,10 +17,10 @@ const SCHEMA_VERSION_1 = 1;
 
 /** @type {string} */
 const SECTION_TITLES = {
-  education: "教育经历",
-  experience: "工作经历",
+  education: "教育背景",
+  experience: "实习经历",
   projects: "项目经历",
-  skills: "技能及其他",
+  skills: "技能特长",
 };
 
 /**
@@ -68,12 +68,20 @@ function createDefaultState() {
       github: "",
     },
     sections: [],
+    layout: {
+      fontSize: 10,
+      lineHeight: 1.57,
+      headerOffsetY: 0,
+    },
     photo: {
       dataUrl: "",
       mimeType: "",
       originalWidth: 0,
       originalHeight: 0,
       scale: 1,
+      frameScale: 1,
+      frameOffsetX: 0,
+      frameOffsetY: 0,
       offsetX: 0,
       offsetY: 0,
     },

@@ -1,5 +1,10 @@
 /* Print styles for PDF export */
 
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
 @media print {
   html,
   body {
@@ -41,6 +46,11 @@
     display: none !important;
   }
 
+  .resume-section::after,
+  #header-info::after {
+    display: none !important;
+  }
+
   [contenteditable] {
     background: none !important;
     cursor: default;
@@ -55,7 +65,38 @@
   }
 
   #photo-container[data-empty="true"]::after {
-    display: none;
+    display: none !important;
+  }
+
+  #resume-page[data-theme] #photo-container[data-empty="true"] {
+    border: 0 !important;
+  }
+
+  #resume-page[data-theme] #photo-container {
+    right: calc(0mm - var(--photo-frame-offset-x)) !important;
+    top: calc(3mm + var(--photo-frame-offset-y)) !important;
+    transform: none !important;
+  }
+
+  #resume-page[data-theme].photo-print-prepared #resume-header {
+    position: static !important;
+  }
+
+  #resume-page[data-theme].photo-print-prepared #photo-container {
+    left: var(--photo-print-x) !important;
+    top: var(--photo-print-y) !important;
+    right: auto !important;
+    width: var(--photo-print-w) !important;
+    height: var(--photo-print-h) !important;
+  }
+
+  #resume-page[data-theme] #photo-container img {
+    width: 100% !important;
+    height: auto !important;
+    transform: translate(
+      var(--photo-image-offset-x, 0mm),
+      var(--photo-image-offset-y, 0mm)
+    ) scale(var(--photo-image-scale, 1)) !important;
   }
 
   * {

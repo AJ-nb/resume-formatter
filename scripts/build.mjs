@@ -102,12 +102,13 @@ function build() {
   const scripts = buildScripts();
 
   // Inject default resume MD as a constant
-  const defaultMdPath = join(ROOT, "fixtures/valid/sample-resume.md");
+  const defaultResumeFilename = "resume-ai-pm v0.md";
+  const defaultMdPath = join(ROOT, "fixtures/valid", defaultResumeFilename);
   let defaultMdScript = "";
   if (existsSync(defaultMdPath)) {
     const mdContent = readFileSync(defaultMdPath, "utf-8");
     const escaped = JSON.stringify(mdContent);
-    defaultMdScript = `<script>const DEFAULT_RESUME_MD = ${escaped};\nconst DEFAULT_RESUME_FILENAME = "sample-resume.md";</script>`;
+    defaultMdScript = `<script>const DEFAULT_RESUME_MD = ${escaped};\nconst DEFAULT_RESUME_FILENAME = ${JSON.stringify(defaultResumeFilename)};</script>`;
     console.log("  Injecting default resume...");
   }
 

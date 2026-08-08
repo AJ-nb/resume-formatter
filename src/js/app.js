@@ -24,6 +24,8 @@ document.addEventListener("DOMContentLoaded", () => {
     updateStatusInfo(initialState);
   }
 
+  applyLayoutState(getState());
+
   initOverflowDetection();
   initEditor();
   initPhoto();
@@ -35,6 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initResumeListPanel();
   initJsonImport();
   initMarkdownPaste();
+  requestAnimationFrame(() => updateA4Status());
 });
 
 /**
@@ -42,10 +45,7 @@ document.addEventListener("DOMContentLoaded", () => {
  */
 function wireToolbar() {
   const btnImport = document.getElementById("btn-import-md");
-  const btnSaveHtml = document.getElementById("btn-save-html");
   const btnExportPdf = document.getElementById("btn-export-pdf");
-  const btnCheckA4 = document.getElementById("btn-check-a4");
-  const btnRestoreImport = document.getElementById("btn-restore-import");
   const fileInput = document.getElementById("file-input-md");
 
   // Import MD
@@ -88,20 +88,12 @@ function wireToolbar() {
     lhSlider.addEventListener("input", () => {
       const lh = parseFloat(lhSlider.value);
       if (lhValue) lhValue.textContent = lh.toFixed(2);
-      const content = document.getElementById("resume-content");
-      if (content) content.style.lineHeight = lh;
+      applyLineHeight(lh);
       const state = getState();
       if (!state.layout) state.layout = {};
       state.layout.lineHeight = lh;
       markDirty();
       requestAnimationFrame(() => updateA4Status());
-    });
-  }
-
-  // Restore import
-  if (btnRestoreImport) {
-    btnRestoreImport.addEventListener("click", () => {
-      handleRestoreImport();
     });
   }
 
@@ -112,9 +104,6 @@ function wireToolbar() {
   }
   const btnSave = document.getElementById("btn-save");
   if (btnSave) btnSave.addEventListener("click", () => handleSave());
-
-  const btnSaveAs = document.getElementById("btn-save-as");
-  if (btnSaveAs) btnSaveAs.addEventListener("click", () => handleSaveAs());
 
   // Export PDF
   if (btnExportPdf) {
@@ -143,11 +132,6 @@ function handleImport(file, fileInput) {
       renderResume(validation.state);
       updateA4Status();
       clearDirty();
-
-      const infoMsg = validation.errors.find((err) => err.level === "info");
-      if (infoMsg) {
-        showToast(infoMsg.message, "success");
-      }
     } else {
       // Import had errors
       const errorMsgs = validation.errors
@@ -166,7 +150,11 @@ function handleImport(file, fileInput) {
   };
 
   reader.onerror = () => {
-    showToast("文件读取失败，请重试。", "error");
+    showDialog({
+      title: "Markdown 读取失败",
+      message: `无法读取“${file.name}”。文件可能已被移动、重命名，或浏览器没有访问权限。请重新选择该文件。`,
+      buttons: [{ text: "好的", primary: true }],
+    });
   };
 
   reader.readAsText(file);
@@ -174,20 +162,44 @@ function handleImport(file, fileInput) {
 
 /**
  * Apply a base font size by scaling all font-size CSS variables proportionally.
- * Baseline is 9pt. All other sizes scale with the same ratio.
+ * Product 1 baseline is 10pt. All other sizes keep its type hierarchy.
  * @param {number} pt
  */
 function applyFontSize(pt) {
   const page = document.getElementById("resume-page");
   if (!page) return;
-  const r = pt / 9; // ratio relative to 9pt baseline
   page.style.setProperty("--font-size-body",          pt + "pt");
-  page.style.setProperty("--font-size-small",          (pt * 1.056).toFixed(2) + "pt");
-  page.style.setProperty("--font-size-entry-name",     (pt * 1.056).toFixed(2) + "pt");
-  page.style.setProperty("--font-size-section-title",  (pt * 1.167).toFixed(2) + "pt");
-  page.style.setProperty("--font-size-contact",        pt + "pt");
-  page.style.setProperty("--font-size-headline",       (pt * 1.444).toFixed(2) + "pt");
-  page.style.setProperty("--font-size-name",           (pt * 1.889).toFixed(2) + "pt");
+  page.style.setProperty("--font-size-small",          pt.toFixed(2) + "pt");
+  page.style.setProperty("--font-size-entry-name",     pt.toFixed(2) + "pt");
+  page.style.setProperty("--font-size-section-title",  (pt * 1.2).toFixed(2) + "pt");
+  page.style.setProperty("--font-size-contact",        (pt * 1.05).toFixed(2) + "pt");
+  page.style.setProperty("--font-size-headline",       (pt * 1.3).toFixed(2) + "pt");
+  page.style.setProperty("--font-size-name",           (pt * 1.8).toFixed(2) + "pt");
+}
+
+function applyLineHeight(lineHeight) {
+  const page = document.getElementById("resume-page");
+  if (page) page.style.setProperty("--layout-line-height", String(lineHeight));
+}
+
+/** Apply persisted layout values and keep toolbar controls in sync. */
+function applyLayoutState(state) {
+  if (!state.layout) state.layout = {};
+  const fontSize = Number(state.layout.fontSize) || 10;
+  const lineHeight = Number(state.layout.lineHeight) || 1.57;
+  state.layout.fontSize = fontSize;
+  state.layout.lineHeight = lineHeight;
+  applyFontSize(fontSize);
+  applyLineHeight(lineHeight);
+
+  const fontSlider = document.getElementById("font-size-slider");
+  const fontOutput = document.getElementById("font-size-value");
+  const lineSlider = document.getElementById("line-height-slider");
+  const lineOutput = document.getElementById("line-height-value");
+  if (fontSlider) fontSlider.value = String(fontSize);
+  if (fontOutput) fontOutput.textContent = `${fontSize}pt`;
+  if (lineSlider) lineSlider.value = String(lineHeight);
+  if (lineOutput) lineOutput.textContent = lineHeight.toFixed(2);
 }
 
 /**
@@ -199,7 +211,6 @@ schema_version: 1
 resume_name: 公司名-岗位
 name: 姓名
 headline: 求职方向
-location: 城市
 phone: 手机号
 email: 邮箱
 ---
@@ -209,7 +220,6 @@ email: 邮箱
 ### 学校名称
 role: 专业｜学历
 date: 2020.09–2024.06
-location: 城市
 
 - 描述
 
@@ -218,7 +228,6 @@ location: 城市
 ### 公司名称｜部门
 role: 岗位
 date: 2024.07–2024.09
-location: 城市
 
 - 描述
 
@@ -256,76 +265,12 @@ function handleSave() {
     return;
   }
   try {
-    const snapshot = saveMarkdownSnapshot(state);
+    saveMarkdownSnapshot(state);
     clearDirty();
-    showToast(`已保存 MD 快照：${snapshot.name}`, "success");
   } catch (e) {
     console.error("Save failed:", e);
     showToast("保存失败，请重试。", "error");
   }
-}
-
-/**
- * Save a named local Markdown snapshot.
- */
-function handleSaveAs() {
-  syncFocusedEditor();
-  const state = getState();
-  if (!state.profile.name && (!state.sections || state.sections.length === 0)) {
-    showToast("请先导入简历。", "warning");
-    return;
-  }
-  const defaultName = sanitizeFileName(
-    state.resumeName || state.source.fileName.replace(/\.md$/, "") || "resume"
-  );
-  showInputDialog({
-    title: "另存为",
-    message: "输入文件名：",
-    defaultValue: defaultName,
-    confirmText: "保存",
-    onSubmit: (fileName) => {
-      try {
-        const snapshot = saveMarkdownSnapshot(state, fileName);
-        clearDirty();
-        showToast(`已保存 MD 快照：${snapshot.name}`, "success");
-      } catch (e) {
-        console.error("Save As failed:", e);
-        showToast("保存失败，请重试。", "error");
-      }
-    },
-  });
-}
-
-/**
- * Handle "Restore Import Content" button.
- */
-function handleRestoreImport() {
-  const state = getState();
-
-  if (!state.importSnapshot) {
-    showToast("没有可恢复的导入内容。", "warning");
-    return;
-  }
-
-  showDialog({
-    title: "恢复导入内容",
-    message: "当前页面中的修改将被清除，是否恢复为最近一次导入的内容？",
-    buttons: [
-      {
-        text: "取消",
-      },
-      {
-        text: "恢复",
-        primary: true,
-        action: () => {
-          restoreImportSnapshot(state, state.importSnapshot);
-          renderResume(state);
-          updateA4Status();
-          showToast("已恢复为最近一次导入的内容。", "success");
-        },
-      },
-    ],
-  });
 }
 
 /**
@@ -496,6 +441,8 @@ let _activeFile = null;
 let _directoryFiles = [];
 let _directoryName = "简历版本";
 let _directoryCanRefresh = false;
+let _directoryImportSequence = 0;
+let _directoryStatusTimer = null;
 
 const MD_SNAPSHOTS_KEY = "resume-formatter:md-snapshots-v1";
 
@@ -526,7 +473,7 @@ function saveMarkdownSnapshot(state, customName) {
     String(now.getSeconds()).padStart(2, "0"),
   ].join("");
   const baseName = sanitizeFileName(
-    customName || state.resumeName || (state.source.fileName || "").replace(/\.md$/i, "") || "resume"
+    customName || state.resumeName || (state.source.fileName || "").replace(/\.(?:md|markdown|json)$/i, "") || "resume"
   ).replace(/\.md$/i, "");
   const snapshot = {
     id: generateId(),
@@ -547,6 +494,26 @@ function deleteMarkdownSnapshot(snapshotId) {
   localStorage.setItem(MD_SNAPSHOTS_KEY, JSON.stringify(snapshots));
   if (_activeFile === `snapshot:${snapshotId}`) _activeFile = null;
   renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
+}
+
+function renameMarkdownSnapshot(snapshotId) {
+  const snapshots = loadMarkdownSnapshots();
+  const snapshot = snapshots.find((item) => item.id === snapshotId);
+  if (!snapshot) return;
+
+  showInputDialog({
+    title: "重命名快照",
+    message: "输入新的快照名称：",
+    defaultValue: snapshot.name.replace(/\.md$/i, ""),
+    confirmText: "重命名",
+    onSubmit: (name) => {
+      const sanitized = sanitizeFileName(name).replace(/\.md$/i, "");
+      if (!sanitized) return;
+      snapshot.name = `${sanitized}.md`;
+      localStorage.setItem(MD_SNAPSHOTS_KEY, JSON.stringify(snapshots));
+      renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
+    },
+  });
 }
 
 const IDB_NAME    = "resume-formatter";
@@ -610,15 +577,34 @@ function initResumeListPanel() {
       const selectedFiles = Array.from(directoryInput.files || []);
       if (selectedFiles.length === 0) return;
 
+      const sequence = ++_directoryImportSequence;
+      setDirectoryImportBusy(true);
+      setDirectoryImportStatus("正在识别文件夹中的简历文件...");
       _dirHandle = null;
-      const rootName = selectedFiles.length === 1 ? "所选 Markdown" : `所选 Markdown（${selectedFiles.length}）`;
-      const files = selectedFiles
-        .filter((file) => /\.md$/i.test(file.name))
+      const supportedFiles = selectedFiles.filter((file) => /\.(?:md|markdown|json)$/i.test(file.name));
+      if (supportedFiles.length === 0) {
+        setDirectoryImportBusy(false);
+        setDirectoryImportStatus("未找到 Markdown 或 JSON 文件。", "error");
+        showDialog({
+          title: "没有可导入的文件",
+          message: "所选文件夹中没有 Markdown 或 JSON 文件。",
+          buttons: [{ text: "好的", primary: true }],
+        });
+        directoryInput.value = "";
+        return;
+      }
+      const firstPath = supportedFiles[0].webkitRelativePath || "";
+      const rootName = firstPath.includes("/") ? firstPath.split("/")[0] : "导入文件夹";
+      const files = supportedFiles
         .map((file) => ({
-          name: file.name,
+          name: stripDirectoryRoot(file.webkitRelativePath || file.name, rootName),
           handle: { getFile: async () => file },
         }));
+      if (sequence !== _directoryImportSequence) return;
       renderResumeFileList(files, rootName, false);
+      setDirectoryImportBusy(false);
+      setDirectoryImportStatus(`已识别 ${files.length} 个文件，请在下方选择要打开的简历。`, "success");
+      showToast(`已读取“${rootName}”：${files.length} 个简历文件。`, "success");
       directoryInput.value = "";
     });
   }
@@ -626,21 +612,52 @@ function initResumeListPanel() {
   if (btnPick) {
     btnPick.addEventListener("click", async () => {
       if (!("showDirectoryPicker" in window)) {
-        if (directoryInput) directoryInput.click();
-        return;
-      }
-      try {
-        _dirHandle = await window.showDirectoryPicker({ mode: "read" });
-        await saveDirHandle(_dirHandle);
-        await refreshResumeList();
-      } catch (e) {
-        if (e.name === "AbortError") return;
-        console.error("Failed to open resume directory:", e);
         if (directoryInput) {
+          setDirectoryImportStatus("请选择包含 Markdown 或 JSON 简历的文件夹。");
           directoryInput.click();
         } else {
-          showToast("无法读取该目录：" + e.message, "error");
+          setDirectoryImportStatus("当前浏览器不支持文件夹导入。", "error");
         }
+        return;
+      }
+      const sequence = ++_directoryImportSequence;
+      setDirectoryImportBusy(true);
+      setDirectoryImportStatus("等待选择文件夹...");
+      try {
+        const handle = await window.showDirectoryPicker({ mode: "read" });
+        if (sequence !== _directoryImportSequence) return;
+        _dirHandle = handle;
+        setDirectoryImportStatus("正在扫描文件夹中的简历文件...");
+        const files = await refreshResumeList(sequence);
+        await saveDirHandle(handle);
+        if (sequence !== _directoryImportSequence) return;
+        setDirectoryImportBusy(false);
+        if (files.length === 0) {
+          setDirectoryImportStatus("未找到 Markdown 或 JSON 文件。", "error");
+          showDialog({
+            title: "没有可导入的文件",
+            message: "所选文件夹中没有 Markdown 或 JSON 文件。",
+            buttons: [{ text: "好的", primary: true }],
+          });
+        } else {
+          setDirectoryImportStatus(`已识别 ${files.length} 个文件，请在下方选择要打开的简历。`, "success");
+          showToast(`已读取“${handle.name}”：${files.length} 个简历文件。`, "success");
+        }
+      } catch (e) {
+        if (sequence !== _directoryImportSequence) return;
+        setDirectoryImportBusy(false);
+        if (e.name === "AbortError") {
+          setDirectoryImportStatus("已取消选择文件夹。");
+          return;
+        }
+        console.error("Failed to open resume directory:", e);
+        const message = e && e.message ? e.message : "浏览器未提供目录读取权限";
+        setDirectoryImportStatus(`读取失败：${message}`, "error");
+        showDialog({
+          title: "文件夹读取失败",
+          message: `无法读取所选文件夹。${message}\n\n你仍可使用“导入 Markdown”或“导入 JSON”选择单个文件。`,
+          buttons: [{ text: "好的", primary: true }],
+        });
       }
     });
   }
@@ -648,11 +665,19 @@ function initResumeListPanel() {
   if (btnRefresh) {
     btnRefresh.addEventListener("click", async () => {
       if (!_dirHandle) return;
+      const sequence = ++_directoryImportSequence;
+      setDirectoryImportBusy(true);
+      setDirectoryImportStatus("正在刷新文件列表...");
       try {
-        await refreshResumeList();
+        const files = await refreshResumeList(sequence);
+        if (sequence !== _directoryImportSequence) return;
+        setDirectoryImportBusy(false);
+        setDirectoryImportStatus(`已刷新，共 ${files.length} 个文件。`, "success");
       } catch (e) {
+        if (sequence !== _directoryImportSequence) return;
+        setDirectoryImportBusy(false);
         console.error("Failed to refresh resume directory:", e);
-        showToast("刷新目录失败：" + e.message, "error");
+        setDirectoryImportStatus("刷新目录失败：" + e.message, "error");
       }
     });
   }
@@ -667,8 +692,9 @@ function initResumeListPanel() {
  * If permission needs re-granting, show a notice in the panel.
  */
 async function restoreDirHandle() {
+  const sequence = _directoryImportSequence;
   const handle = await loadDirHandle();
-  if (!handle) return;
+  if (!handle || sequence !== _directoryImportSequence) return;
 
   try {
     // Check current permission state
@@ -676,7 +702,7 @@ async function restoreDirHandle() {
 
     if (perm === "granted") {
       _dirHandle = handle;
-      await refreshResumeList();
+      await refreshResumeList(sequence);
     } else {
       // Needs user gesture to re-grant — show reauth button
       _dirHandle = handle;
@@ -733,18 +759,50 @@ function showReauthNotice(handle) {
 /**
  * Read directory and populate the resume list.
  */
-async function refreshResumeList() {
-  if (!_dirHandle) return;
+async function refreshResumeList(sequence = _directoryImportSequence) {
+  if (!_dirHandle) return [];
 
-  // Collect Markdown files recursively so versions can live in subfolders.
+  // Collect supported resume files recursively so versions can live in subfolders.
   const files = [];
-  await collectMarkdownFiles(_dirHandle, "", files);
+  await collectResumeFiles(_dirHandle, "", files);
 
+  if (sequence !== _directoryImportSequence) return files;
   renderResumeFileList(files, _dirHandle.name, true);
+  return files;
+}
+
+function stripDirectoryRoot(path, rootName) {
+  const prefix = `${rootName}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+function setDirectoryImportBusy(isBusy) {
+  const button = document.getElementById("btn-pick-dir");
+  if (!button) return;
+  button.disabled = isBusy;
+  button.textContent = isBusy ? "正在读取..." : "导入文件夹";
+}
+
+function setDirectoryImportStatus(message, level = "info") {
+  const status = document.getElementById("panel-import-status");
+  if (!status) return;
+  if (_directoryStatusTimer) {
+    clearTimeout(_directoryStatusTimer);
+    _directoryStatusTimer = null;
+  }
+  status.textContent = message;
+  status.dataset.level = level;
+  status.hidden = !message;
+  if (level === "success") {
+    _directoryStatusTimer = setTimeout(() => {
+      status.hidden = true;
+      _directoryStatusTimer = null;
+    }, 5000);
+  }
 }
 
 /**
- * Render collected Markdown files in the version panel.
+ * Render collected resume files in the version panel.
  * @param {Array<{name:string, handle:{getFile:Function}}>} files
  * @param {string} directoryName
  * @param {boolean} canRefresh
@@ -789,8 +847,19 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       label.textContent = snapshot.name.replace(/\.md$/i, "");
       li.appendChild(label);
 
+      const renameButton = document.createElement("button");
+      renameButton.className = "resume-list-action resume-list-rename";
+      renameButton.textContent = "✎";
+      renameButton.title = "重命名快照";
+      renameButton.setAttribute("aria-label", "重命名快照");
+      renameButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        renameMarkdownSnapshot(snapshot.id);
+      });
+      li.appendChild(renameButton);
+
       const deleteButton = document.createElement("button");
-      deleteButton.className = "resume-list-delete";
+      deleteButton.className = "resume-list-action resume-list-delete";
       deleteButton.textContent = "×";
       deleteButton.title = "删除本地快照";
       deleteButton.addEventListener("click", (event) => {
@@ -818,7 +887,7 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const versionKey = `source:${name}`;
       const li = document.createElement("li");
       li.className = "resume-list-item" + (versionKey === _activeFile ? " active" : "");
-      li.textContent = name.replace(/\.md$/i, "");
+      li.textContent = name.replace(/\.(?:md|markdown|json)$/i, "");
       li.title = name;
       li.dataset.versionKey = versionKey;
       li.addEventListener("click", () => loadResumeFromHandle(name, handle, versionKey));
@@ -828,31 +897,31 @@ function renderResumeFileList(files, directoryName, canRefresh) {
 
   if (empty) {
     const hasVersions = sourceFiles.length > 0 || snapshots.length > 0;
-    empty.textContent = hasVersions ? "" : "选择 Markdown 文件，或保存当前内容创建快照";
+    empty.textContent = hasVersions ? "" : "暂无导入文件";
     empty.classList.toggle("hidden", hasVersions);
   }
 }
 
 /**
- * Recursively collect Markdown files from a directory.
+ * Recursively collect Markdown and JSON files from a directory.
  * @param {FileSystemDirectoryHandle} directory
  * @param {string} prefix
  * @param {Array<{name:string, handle:FileSystemFileHandle}>} files
  */
-async function collectMarkdownFiles(directory, prefix, files) {
+async function collectResumeFiles(directory, prefix, files) {
   for await (const [name, handle] of directory.entries()) {
     if (name.startsWith(".")) continue;
     const relativeName = prefix ? `${prefix}/${name}` : name;
-    if (handle.kind === "file" && /\.md$/i.test(name)) {
+    if (handle.kind === "file" && /\.(?:md|markdown|json)$/i.test(name)) {
       files.push({ name: relativeName, handle });
     } else if (handle.kind === "directory") {
-      await collectMarkdownFiles(handle, relativeName, files);
+      await collectResumeFiles(handle, relativeName, files);
     }
   }
 }
 
 /**
- * Load a resume .md file from a FileSystemFileHandle.
+ * Load a supported resume file from a FileSystemFileHandle.
  * @param {string} name
  * @param {FileSystemFileHandle} handle
  */
@@ -876,8 +945,10 @@ async function loadResumeFromHandle(name, handle, versionKey = name) {
     const file = await handle.getFile();
     const text = await file.text();
 
-    const parseResult = parseMarkdown(text);
-    const validation  = validateAndBuildState(parseResult, name);
+    const isJson = /\.json$/i.test(name);
+    const validation = isJson
+      ? importJsonResume(text, name)
+      : validateAndBuildState(parseMarkdown(text), name);
 
     if (validation.state) {
       setState(validation.state);
@@ -891,18 +962,35 @@ async function loadResumeFromHandle(name, handle, versionKey = name) {
         li.classList.toggle("active", li.dataset.versionKey === versionKey);
       });
 
-      const info = validation.errors.find((e) => e.level === "info");
-      if (info) showToast(info.message, "success");
     } else {
       const errs = validation.errors
         .filter((e) => e.level === "error")
         .map((e) => e.message)
         .join("\n");
-      showDialog({ title: "导入失败", message: errs, buttons: [{ text: "好的", primary: true }] });
+      showDialog({ title: `${isJson ? "JSON" : "Markdown"} 导入失败`, message: errs, buttons: [{ text: "好的", primary: true }] });
     }
   } catch (e) {
     console.error(e);
-    showToast("文件读取失败：" + e.message, "error");
+    const missing = e && (e.name === "NotFoundError" || /not found|不存在/i.test(e.message || ""));
+    const denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
+
+    if (missing && _dirHandle) {
+      try {
+        await refreshResumeList();
+      } catch (refreshError) {
+        console.warn("Failed to refresh after missing file:", refreshError);
+      }
+    }
+
+    showDialog({
+      title: missing ? "文件已变化" : denied ? "需要重新授权" : "文件打开失败",
+      message: missing
+        ? `“${name}”已被移动、重命名或删除，右侧文件列表已刷新，请选择新的文件名。`
+        : denied
+          ? "浏览器已失去该目录的读取权限，请从顶部“导入”菜单重新选择文件夹。"
+          : `无法打开“${name}”：${e.message || "未知错误"}`,
+      buttons: [{ text: "好的", primary: true }],
+    });
   }
 }
 
@@ -931,6 +1019,7 @@ function initThemeSwitcher() {
     if (themeMenu) themeMenu.open = false;
     // Re-render header to reflect theme-specific contact format
     const state = getState();
+    if (typeof applyPhotoFrameSize === "function") applyPhotoFrameSize(state.photo);
     if (state.sections && state.sections.length > 0) {
       renderResume(state);
     }
@@ -943,7 +1032,7 @@ function initThemeSwitcher() {
 }
 
 function initToolbarMenus() {
-  const menus = Array.from(document.querySelectorAll("#toolbar .toolbar-menu"));
+  const menus = Array.from(document.querySelectorAll(".toolbar-menu"));
 
   menus.forEach((menu) => {
     menu.addEventListener("toggle", () => {
@@ -954,12 +1043,11 @@ function initToolbarMenus() {
     });
   });
 
-  const moreMenu = document.getElementById("more-menu");
-  if (moreMenu) {
-    moreMenu.querySelectorAll("button").forEach((button) => {
-      button.addEventListener("click", () => { moreMenu.open = false; });
+  menus.forEach((menu) => {
+    menu.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", () => { menu.open = false; });
     });
-  }
+  });
 
   document.addEventListener("click", (event) => {
     menus.forEach((menu) => {
@@ -998,10 +1086,10 @@ function initJsonImport() {
   const btnDocxToMd = document.getElementById("btn-copy-docx-to-md");
   const btnDocxToJson = document.getElementById("btn-copy-docx-to-json");
 
-  if (btnPdfToMd) btnPdfToMd.addEventListener("click", () => handleCopyPrompt(PROMPT_PDF_TO_MD, "PDF 转 Markdown Prompt 已复制"));
-  if (btnPdfToJson) btnPdfToJson.addEventListener("click", () => handleCopyPrompt(PROMPT_PDF_TO_JSON, "PDF 转 JSON Prompt 已复制"));
-  if (btnDocxToMd) btnDocxToMd.addEventListener("click", () => handleCopyPrompt(PROMPT_DOCX_TO_MD, "DOCX 转 Markdown Prompt 已复制"));
-  if (btnDocxToJson) btnDocxToJson.addEventListener("click", () => handleCopyPrompt(PROMPT_DOCX_TO_JSON, "DOCX 转 JSON Prompt 已复制"));
+  if (btnPdfToMd) btnPdfToMd.addEventListener("click", () => handleCopyPrompt(PROMPT_PDF_TO_MD, btnPdfToMd));
+  if (btnPdfToJson) btnPdfToJson.addEventListener("click", () => handleCopyPrompt(PROMPT_PDF_TO_JSON, btnPdfToJson));
+  if (btnDocxToMd) btnDocxToMd.addEventListener("click", () => handleCopyPrompt(PROMPT_DOCX_TO_MD, btnDocxToMd));
+  if (btnDocxToJson) btnDocxToJson.addEventListener("click", () => handleCopyPrompt(PROMPT_DOCX_TO_JSON, btnDocxToJson));
 
   if (fileInput) {
     fileInput.addEventListener("change", (e) => {
@@ -1100,12 +1188,6 @@ function handlePasteMarkdown() {
         renderResume(validation.state);
         updateA4Status();
         clearDirty();
-        const infoMsg = validation.errors.find((err) => err.level === "info");
-        if (infoMsg) {
-          showToast(infoMsg.message, "success");
-        } else {
-          showToast("已导入：粘贴的 Markdown", "success");
-        }
       } else {
         const errorMsgs = validation.errors
           .filter((err) => err.level === "error")
@@ -1325,13 +1407,20 @@ function handleCopyAiPrompt() {
   // Deprecated — replaced by handleCopyPrompt
 }
 
-function handleCopyPrompt(promptText, toastMessage) {
+function handleCopyPrompt(promptText, sourceButton) {
   if (typeof navigator === "undefined" || !navigator.clipboard) {
     showToast("当前浏览器不支持自动复制，请手动复制。", "warning");
     return;
   }
   navigator.clipboard.writeText(promptText).then(() => {
-    showToast(toastMessage, "success");
+    const label = document.getElementById("prompt-menu-label");
+    const originalButtonText = sourceButton ? sourceButton.textContent : "";
+    if (sourceButton) sourceButton.textContent = "已复制";
+    if (label) label.textContent = "已复制";
+    setTimeout(() => {
+      if (sourceButton) sourceButton.textContent = originalButtonText;
+      if (label) label.textContent = "转换提示词";
+    }, 1200);
   }).catch(() => {
     showToast("复制失败，请手动复制。", "error");
   });
@@ -1416,13 +1505,6 @@ function handleJsonImportResult(result, fileName, rawJson) {
     renderResume(result.state);
     updateA4Status();
     clearDirty();
-
-    const infoMsg = result.errors.find((err) => err.level === "info");
-    if (infoMsg) {
-      showToast(infoMsg.message, "success");
-    } else {
-      showToast("已导入：" + fileName, "success");
-    }
   } else {
     const errorMsgs = result.errors
       .filter((err) => err.level === "error")

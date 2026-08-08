@@ -92,12 +92,14 @@ function initEditor() {
   });
 
   initSpacingHandles();
+  initHeaderPositionDrag();
   initSelectionFormatting();
 }
 
 function initSelectionFormatting() {
   const buttons = {
     bold: document.getElementById("btn-selection-bold"),
+    italic: document.getElementById("btn-selection-italic"),
     smaller: document.getElementById("btn-selection-smaller"),
     larger: document.getElementById("btn-selection-larger"),
     reset: document.getElementById("btn-selection-reset"),
@@ -127,12 +129,14 @@ function initSelectionFormatting() {
     _formatOffsets = getSelectionOffsets(target, range);
     Object.values(buttons).forEach((button) => { if (button) button.disabled = false; });
     updateBoldButtonState(buttons.bold);
+    updateItalicButtonState(buttons.italic);
   });
 
   Object.values(buttons).forEach((button) => {
     if (button) button.addEventListener("mousedown", (event) => event.preventDefault());
   });
   if (buttons.bold) buttons.bold.addEventListener("click", () => applySelectionFormat("bold"));
+  if (buttons.italic) buttons.italic.addEventListener("click", () => applySelectionFormat("italic"));
   if (buttons.smaller) buttons.smaller.addEventListener("click", () => applySelectionFormat("size", -0.5));
   if (buttons.larger) buttons.larger.addEventListener("click", () => applySelectionFormat("size", 0.5));
   if (buttons.reset) buttons.reset.addEventListener("click", () => applySelectionFormat("reset"));
@@ -202,6 +206,12 @@ function applySelectionFormat(action, amount = 0) {
       selected.forEach((part) => {
         if (part.selected) part.token.type = shouldUnbold ? "text" : "strong";
       });
+    } else if (action === "italic") {
+      const shouldUnitalic = selected.some((part) => part.selected)
+        && selected.filter((part) => part.selected).every((part) => part.token.italic);
+      selected.forEach((part) => {
+        if (part.selected) part.token.italic = !shouldUnitalic;
+      });
     } else if (action === "size") {
       selected.forEach((part) => {
         if (part.selected) part.token.fontSizeDelta = clampFontDelta((part.token.fontSizeDelta || 0) + amount);
@@ -215,8 +225,8 @@ function applySelectionFormat(action, amount = 0) {
     bullet.content = mergeInlineTokens(selected.map((part) => part.token));
     target.replaceChildren(renderInlineContent(bullet.content));
   } else {
-    if (action === "bold") {
-      showToast("加粗适用于正文要点；姓名、公司和岗位保持模板字重。", "info");
+    if (action === "bold" || action === "italic") {
+      showToast("加粗和斜体适用于正文要点；姓名、公司和岗位保持模板样式。", "info");
       return;
     }
     const key = getBlockFormatKey(target);
@@ -234,6 +244,7 @@ function applySelectionFormat(action, amount = 0) {
 
   markDirty();
   updateBoldButtonState(document.getElementById("btn-selection-bold"));
+  updateItalicButtonState(document.getElementById("btn-selection-italic"));
   requestAnimationFrame(() => updateA4Status());
 }
 
@@ -276,7 +287,8 @@ function mergeInlineTokens(tokens) {
   return tokens.reduce((merged, token) => {
     if (!token.value) return merged;
     const previous = merged[merged.length - 1];
-    if (previous && previous.type === token.type && (previous.fontSizeDelta || 0) === (token.fontSizeDelta || 0)) {
+    if (previous && previous.type === token.type && !!previous.italic === !!token.italic
+      && (previous.fontSizeDelta || 0) === (token.fontSizeDelta || 0)) {
       previous.value += token.value;
     } else {
       merged.push({ ...token });
@@ -325,6 +337,126 @@ function applyLocalFormatting(state) {
   });
 }
 
+/** ========================
+ *  Header position handle
+ *  ======================== */
+
+const HEADER_OFFSET_MIN_MM = -8;
+const HEADER_OFFSET_MAX_MM = 8;
+const HEADER_OFFSET_STEP_MM = 0.5;
+
+function normalizeHeaderOffset(value) {
+  const numeric = Number(value) || 0;
+  const snapped = Math.round(numeric / HEADER_OFFSET_STEP_MM) * HEADER_OFFSET_STEP_MM;
+  return Math.max(HEADER_OFFSET_MIN_MM, Math.min(HEADER_OFFSET_MAX_MM, snapped));
+}
+
+function setHeaderOffsetPreview(offsetMm) {
+  const header = document.getElementById("header-info");
+  const handle = document.getElementById("header-position-handle");
+  const value = handle && handle.querySelector(".header-position-value");
+  if (header) header.style.setProperty("--header-offset-y", `${offsetMm}mm`);
+  if (value) value.textContent = `${offsetMm.toFixed(1)} mm`;
+  if (handle) {
+    handle.setAttribute("aria-valuenow", String(offsetMm));
+    handle.setAttribute("aria-valuetext", offsetMm === 0 ? "居中" : `${Math.abs(offsetMm).toFixed(1)} 毫米${offsetMm < 0 ? "向上" : "向下"}`);
+  }
+}
+
+function applyHeaderPosition(state) {
+  const offset = normalizeHeaderOffset(state.layout && state.layout.headerOffsetY);
+  setHeaderOffsetPreview(offset);
+}
+
+function commitHeaderOffset(offsetMm) {
+  const state = getState();
+  if (!state.layout) state.layout = {};
+  state.layout.headerOffsetY = normalizeHeaderOffset(offsetMm);
+  setHeaderOffsetPreview(state.layout.headerOffsetY);
+  markDirty();
+}
+
+function initHeaderPositionDrag() {
+  const handle = document.getElementById("header-position-handle");
+  if (!handle) return;
+
+  handle.setAttribute("role", "slider");
+  handle.setAttribute("aria-valuemin", String(HEADER_OFFSET_MIN_MM));
+  handle.setAttribute("aria-valuemax", String(HEADER_OFFSET_MAX_MM));
+  handle.setAttribute("aria-orientation", "vertical");
+  applyHeaderPosition(getState());
+
+  let dragging = false;
+  let changed = false;
+  let startY = 0;
+  let startOffset = 0;
+  let pxPerMm = getPxPerMm();
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragging = true;
+    changed = false;
+    startY = event.clientY;
+    startOffset = normalizeHeaderOffset(getState().layout && getState().layout.headerOffsetY);
+    pxPerMm = getPxPerMm();
+    handle.classList.add("dragging");
+    const header = document.getElementById("header-info");
+    if (header) header.classList.add("header-dragging");
+    handle.setPointerCapture(event.pointerId);
+  });
+
+  handle.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const nextOffset = normalizeHeaderOffset(startOffset + (event.clientY - startY) / pxPerMm);
+    if (!changed && nextOffset !== startOffset) {
+      pushUndoState();
+      changed = true;
+    }
+    setHeaderOffsetPreview(nextOffset);
+  });
+
+  handle.addEventListener("pointerup", (event) => {
+    if (!dragging) return;
+    const nextOffset = normalizeHeaderOffset(startOffset + (event.clientY - startY) / pxPerMm);
+    if (changed) commitHeaderOffset(nextOffset);
+    else setHeaderOffsetPreview(startOffset);
+    dragging = false;
+    handle.classList.remove("dragging");
+    const header = document.getElementById("header-info");
+    if (header) header.classList.remove("header-dragging");
+  });
+
+  handle.addEventListener("pointercancel", () => {
+    if (!dragging) return;
+    setHeaderOffsetPreview(startOffset);
+    dragging = false;
+    handle.classList.remove("dragging");
+    const header = document.getElementById("header-info");
+    if (header) header.classList.remove("header-dragging");
+  });
+
+  handle.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    const current = normalizeHeaderOffset(getState().layout && getState().layout.headerOffsetY);
+    if (current === 0) return;
+    pushUndoState();
+    commitHeaderOffset(0);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    const current = normalizeHeaderOffset(getState().layout && getState().layout.headerOffsetY);
+    const amount = event.shiftKey ? 1 : HEADER_OFFSET_STEP_MM;
+    const next = event.key === "Home" ? 0 : current + (event.key === "ArrowUp" ? -amount : amount);
+    if (normalizeHeaderOffset(next) === current) return;
+    pushUndoState();
+    commitHeaderOffset(next);
+  });
+}
+
 function updateBoldButtonState(button) {
   if (!button || !_formatTarget || !_formatTarget.dataset.bulletId) {
     if (button) button.classList.remove("toolbar-btn-active");
@@ -338,6 +470,21 @@ function updateBoldButtonState(button) {
   }
   const parts = splitTokensForRange(bullet.content, offsets.start, offsets.end).filter((part) => part.selected);
   button.classList.toggle("toolbar-btn-active", parts.length > 0 && parts.every((part) => part.token.type === "strong"));
+}
+
+function updateItalicButtonState(button) {
+  if (!button || !_formatTarget || !_formatTarget.dataset.bulletId) {
+    if (button) button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  const bullet = findBulletById(_formatTarget.dataset.bulletId);
+  const offsets = _formatOffsets || getSelectionOffsets(_formatTarget, _formatRange);
+  if (!bullet || !offsets || offsets.start === offsets.end) {
+    button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  const parts = splitTokensForRange(bullet.content, offsets.start, offsets.end).filter((part) => part.selected);
+  button.classList.toggle("toolbar-btn-active", parts.length > 0 && parts.every((part) => part.token.italic));
 }
 
 /** ========================
@@ -559,6 +706,9 @@ function syncElementToState(el) {
         for (const bullet of entry.bullets) {
           if (bullet.id === bulletId) {
             bullet.content = tokensFromEditableElement(el);
+            if (typeof updateBulletSemanticClass === "function") {
+              updateBulletSemanticClass(el, bullet.content);
+            }
             return;
           }
         }
@@ -569,20 +719,22 @@ function syncElementToState(el) {
 
 function tokensFromEditableElement(element) {
   const tokens = [];
-  const walk = (node, strong = false, inheritedDelta = 0) => {
+  const walk = (node, strong = false, italic = false, inheritedDelta = 0) => {
     if (node.nodeType === Node.TEXT_NODE) {
       if (!node.nodeValue) return;
       tokens.push({
         type: strong ? "strong" : "text",
         value: node.nodeValue,
+        ...(italic ? { italic: true } : {}),
         ...(inheritedDelta ? { fontSizeDelta: inheritedDelta } : {}),
       });
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const nextStrong = strong || node.tagName === "STRONG" || node.tagName === "B";
+    const nextItalic = italic || node.tagName === "EM" || node.tagName === "I";
     const nextDelta = Number(node.dataset.fontSizeDelta || inheritedDelta || 0);
-    node.childNodes.forEach((child) => walk(child, nextStrong, nextDelta));
+    node.childNodes.forEach((child) => walk(child, nextStrong, nextItalic, nextDelta));
   };
   element.childNodes.forEach((node) => walk(node));
   return mergeInlineTokens(tokens);
@@ -594,8 +746,9 @@ function tokensFromEditableElement(element) {
 
 const SNAP_GRID_MM   = 0.5;
 const SNAP_RADIUS_PX = 6;
-const SPACING_MIN_MM = 0;
-const SPACING_MAX_MM = 20;
+const SPACING_MIN_MM = -100;
+const SPACING_MAX_MM = 100;
+const SPACING_DEFAULT_MM = 0;
 
 function getPxPerMm() {
   const ruler = document.createElement("div");
@@ -608,7 +761,7 @@ function getPxPerMm() {
 
 function collectSnapTargets() {
   const state = getState();
-  const values = state.sections.map(s => s.spacingBefore !== undefined ? s.spacingBefore : 2);
+  const values = state.sections.map(s => s.spacingBefore !== undefined ? s.spacingBefore : SPACING_DEFAULT_MM);
   const grid = [0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5];
   return [...new Set([...values, ...grid])].sort((a, b) => a - b);
 }
@@ -617,43 +770,86 @@ function snapMm(rawMm, targets, pxPerMm) {
   let snapped = Math.round(rawMm / SNAP_GRID_MM) * SNAP_GRID_MM;
   snapped = Math.max(SPACING_MIN_MM, Math.min(SPACING_MAX_MM, snapped));
   const snapRadiusMm = SNAP_RADIUS_PX / pxPerMm;
+  let nearestTarget = null;
+  let nearestDistance = Infinity;
   for (const target of targets) {
-    if (Math.abs(rawMm - target) <= snapRadiusMm) return target;
+    const distance = Math.abs(rawMm - target);
+    if (distance < nearestDistance) {
+      nearestTarget = target;
+      nearestDistance = distance;
+    }
   }
-  return snapped;
+  return nearestDistance <= snapRadiusMm ? nearestTarget : snapped;
+}
+
+function updateSpacingHandleVisual(handle, spacingMm) {
+  if (!handle) return;
+  handle.style.setProperty("--spacing-size", `${spacingMm}mm`);
+  handle.setAttribute("aria-valuenow", String(spacingMm));
+  handle.setAttribute("aria-valuetext", `${spacingMm.toFixed(1)} 毫米`);
+  const tip = handle.querySelector(".spacing-tooltip");
+  if (tip) tip.textContent = `${spacingMm.toFixed(1)} mm`;
+  const dragHandle = document.querySelector(`.section-drag-handle[data-section-id="${CSS.escape(handle.dataset.sectionId)}"]`);
+  if (dragHandle) {
+    dragHandle.setAttribute("aria-valuenow", String(spacingMm));
+    dragHandle.setAttribute("aria-valuetext", `${spacingMm.toFixed(1)} 毫米`);
+  }
+}
+
+function setSectionSpacing(sectionId, spacingMm, markAsDirty = true) {
+  const state = getState();
+  const section = state.sections.find((item) => item.id === sectionId);
+  const sectionEl = document.querySelector(`section[data-section-id="${CSS.escape(sectionId)}"]`);
+  const handle = document.querySelector(`.spacing-handle[data-section-id="${CSS.escape(sectionId)}"]`);
+  if (!section) return;
+  section.spacingBefore = spacingMm;
+  if (sectionEl) sectionEl.style.marginTop = `${spacingMm}mm`;
+  updateSpacingHandleVisual(handle, spacingMm);
+  if (markAsDirty) {
+    markDirty();
+    updateA4Status();
+  }
 }
 
 function initSpacingHandles() {
   const container = document.getElementById("resume-sections");
   if (!container) return;
 
-  let dragging = false, startY = 0, startMm = 2, activeSectionId = null, activeHandle = null, pxPerMm = getPxPerMm();
+  let dragging = false, changed = false, startY = 0, startMm = SPACING_DEFAULT_MM;
+  let activeSectionId = null, activeHandle = null, activeSectionEl = null;
+  let pxPerMm = getPxPerMm();
 
   container.addEventListener("pointerdown", (e) => {
-    const handle = e.target.closest(".spacing-handle");
-    if (!handle) return;
+    const dragHandle = e.target.closest(".section-drag-handle");
+    if (!dragHandle || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     dragging = true;
+    changed = false;
     startY = e.clientY;
-    activeSectionId = handle.dataset.sectionId;
-    activeHandle = handle;
+    activeSectionId = dragHandle.dataset.sectionId;
+    activeHandle = container.querySelector(`.spacing-handle[data-section-id="${CSS.escape(activeSectionId)}"]`);
+    activeSectionEl = container.querySelector(`section[data-section-id="${CSS.escape(activeSectionId)}"]`);
     pxPerMm = getPxPerMm();
     const state = getState();
     const section = state.sections.find(s => s.id === activeSectionId);
-    startMm = (section && section.spacingBefore !== undefined) ? section.spacingBefore : 2;
-    handle.classList.add("dragging");
-    handle.setPointerCapture(e.pointerId);
+    startMm = (section && section.spacingBefore !== undefined) ? section.spacingBefore : SPACING_DEFAULT_MM;
+    if (activeHandle) activeHandle.classList.add("dragging");
+    if (activeSectionEl) activeSectionEl.classList.add("section-dragging");
+    dragHandle.setPointerCapture(e.pointerId);
   });
 
   container.addEventListener("pointermove", (e) => {
     if (!dragging || !activeSectionId) return;
     const rawMm = startMm + (e.clientY - startY) / pxPerMm;
     const snapped = snapMm(rawMm, collectSnapTargets(), pxPerMm);
+    if (!changed && snapped !== startMm) {
+      pushUndoState();
+      changed = true;
+    }
     const sectionEl = container.querySelector(`section[data-section-id="${activeSectionId}"]`);
     if (sectionEl) sectionEl.style.marginTop = snapped + "mm";
-    const tip = activeHandle && activeHandle.querySelector(".spacing-tooltip");
-    if (tip) tip.textContent = snapped.toFixed(1) + " mm";
+    updateSpacingHandleVisual(activeHandle, snapped);
     if (activeHandle) {
       const isSnapped = collectSnapTargets().some(t => t !== startMm && Math.abs(snapped - t) < 0.01);
       activeHandle.classList.toggle("snapped", isSnapped);
@@ -664,12 +860,49 @@ function initSpacingHandles() {
     if (!dragging || !activeSectionId) return;
     const rawMm = startMm + (e.clientY - startY) / pxPerMm;
     const snapped = snapMm(rawMm, collectSnapTargets(), pxPerMm);
-    const state = getState();
-    const section = state.sections.find(s => s.id === activeSectionId);
-    if (section) section.spacingBefore = snapped;
+    if (changed) setSectionSpacing(activeSectionId, snapped, false);
+    else updateSpacingHandleVisual(activeHandle, startMm);
     if (activeHandle) activeHandle.classList.remove("dragging", "snapped");
-    dragging = false; activeSectionId = null; activeHandle = null;
-    markDirty();
-    updateA4Status();
+    if (activeSectionEl) activeSectionEl.classList.remove("section-dragging");
+    dragging = false; activeSectionId = null; activeHandle = null; activeSectionEl = null;
+    if (changed) {
+      markDirty();
+      updateA4Status();
+    }
+  });
+
+  container.addEventListener("pointercancel", () => {
+    if (!dragging || !activeSectionId) return;
+    const sectionEl = container.querySelector(`section[data-section-id="${activeSectionId}"]`);
+    if (sectionEl) sectionEl.style.marginTop = startMm + "mm";
+    updateSpacingHandleVisual(activeHandle, startMm);
+    if (activeHandle) activeHandle.classList.remove("dragging", "snapped");
+    if (activeSectionEl) activeSectionEl.classList.remove("section-dragging");
+    dragging = false; activeSectionId = null; activeHandle = null; activeSectionEl = null;
+  });
+
+  container.addEventListener("dblclick", (e) => {
+    const dragHandle = e.target.closest(".section-drag-handle");
+    if (!dragHandle) return;
+    e.preventDefault();
+    const section = getState().sections.find((item) => item.id === dragHandle.dataset.sectionId);
+    const current = section && section.spacingBefore !== undefined ? section.spacingBefore : SPACING_DEFAULT_MM;
+    if (current === SPACING_DEFAULT_MM) return;
+    pushUndoState();
+    setSectionSpacing(dragHandle.dataset.sectionId, SPACING_DEFAULT_MM);
+  });
+
+  container.addEventListener("keydown", (e) => {
+    const dragHandle = e.target.closest(".section-drag-handle");
+    if (!dragHandle || !["ArrowUp", "ArrowDown", "Home"].includes(e.key)) return;
+    e.preventDefault();
+    const section = getState().sections.find((item) => item.id === dragHandle.dataset.sectionId);
+    const current = section && section.spacingBefore !== undefined ? section.spacingBefore : SPACING_DEFAULT_MM;
+    const amount = e.shiftKey ? 1 : SNAP_GRID_MM;
+    const raw = e.key === "Home" ? SPACING_DEFAULT_MM : current + (e.key === "ArrowUp" ? -amount : amount);
+    const next = snapMm(raw, [], getPxPerMm());
+    if (next === current) return;
+    pushUndoState();
+    setSectionSpacing(dragHandle.dataset.sectionId, next);
   });
 }

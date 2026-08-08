@@ -42,6 +42,17 @@ function getA4HeightPx() {
   return h;
 }
 
+/** Measure the same content flow that will be exported, excluding editor UI. */
+function getPrintableContentHeightPx(contentEl) {
+  const pageEl = document.getElementById("resume-page");
+  if (!pageEl) return contentEl.offsetHeight;
+
+  pageEl.classList.add("a4-measuring");
+  const height = contentEl.offsetHeight;
+  pageEl.classList.remove("a4-measuring");
+  return height;
+}
+
 /**
  * Check if resume content overflows the A4 page.
  * @returns {{ overflow: boolean, pxBeyond: number, mmBeyond: number, firstOverflowSection: string|null }}
@@ -51,7 +62,7 @@ function checkOverflow() {
   if (!contentEl) return { overflow: false, pxBeyond: 0, mmBeyond: 0, firstOverflowSection: null };
 
   const a4Px      = getA4HeightPx();
-  const contentPx = contentEl.offsetHeight;
+  const contentPx = getPrintableContentHeightPx(contentEl);
   const overflowPx = Math.max(0, contentPx - a4Px);
   const overflow   = overflowPx > OVERFLOW_TOLERANCE_PX;
 
@@ -82,17 +93,28 @@ function checkOverflow() {
  * Update A4 status display and fix button label.
  */
 function updateA4Status() {
+  const statusEl = document.getElementById("a4-status");
   const btnLabel  = document.getElementById("btn-fix-label");
   const fixBtn    = document.getElementById("btn-fix-overflow");
   const result    = checkOverflow();
 
   if (result.overflow) {
     const msg = `⚠️ 超出 A4 约 ${result.mmBeyond.toFixed(1)} mm`;
-    if (btnLabel)  btnLabel.textContent = msg;
-    if (fixBtn)    fixBtn.classList.add("toolbar-btn-warn");
+    if (statusEl)  { statusEl.textContent = msg; statusEl.style.color = "#dc2626"; }
+    if (btnLabel)  btnLabel.textContent = `修复溢出 ${result.mmBeyond.toFixed(1)}mm`;
+    if (fixBtn) {
+      fixBtn.hidden = false;
+      fixBtn.title = `${msg}，点击自动压缩排版`;
+      fixBtn.classList.add("toolbar-btn-warn");
+    }
   } else {
-    if (btnLabel)  btnLabel.textContent = "A4 正常";
-    if (fixBtn)    fixBtn.classList.remove("toolbar-btn-warn");
+    if (statusEl)  { statusEl.textContent = "✓ A4 排版正常"; statusEl.style.color = "#16a34a"; }
+    if (btnLabel)  btnLabel.textContent = "修复溢出";
+    if (fixBtn) {
+      fixBtn.hidden = true;
+      fixBtn.title = "修复 A4 内容溢出";
+      fixBtn.classList.remove("toolbar-btn-warn");
+    }
   }
 }
 
@@ -104,10 +126,7 @@ function updateA4Status() {
 function autoFixOverflow() {
   let result = checkOverflow();
 
-  if (!result.overflow) {
-    showToast("A4 排版正常，无需修复。", "success");
-    return;
-  }
+  if (!result.overflow) return;
 
   const state = getState();
   const DEFAULT_SPACING = 2;
@@ -115,8 +134,10 @@ function autoFixOverflow() {
 
   for (let i = 0; i < MAX_ITER && result.overflow; i++) {
     const sections = state.sections;
-    const totalSpacing = sections.reduce((sum, s) =>
-      sum + (s.spacingBefore !== undefined ? s.spacingBefore : DEFAULT_SPACING), 0);
+    const totalSpacing = sections.reduce((sum, s) => {
+      const spacing = s.spacingBefore !== undefined ? s.spacingBefore : DEFAULT_SPACING;
+      return sum + Math.max(0, spacing);
+    }, 0);
 
     if (totalSpacing > 0.1) {
       // Reduce section spacings proportionally (with 15% buffer)
@@ -124,15 +145,14 @@ function autoFixOverflow() {
       const factor = target / totalSpacing;
       sections.forEach(s => {
         const cur = s.spacingBefore !== undefined ? s.spacingBefore : DEFAULT_SPACING;
-        s.spacingBefore = Math.max(0, Math.round(cur * factor * 10) / 10);
+        if (cur > 0) s.spacingBefore = Math.round(cur * factor * 10) / 10;
       });
     } else {
       // Spacings exhausted — shrink line-height stored in state.layout
       if (!state.layout) state.layout = {};
-      const curLH = state.layout.lineHeight || 1.4;
+      const curLH = state.layout.lineHeight || 1.57;
       state.layout.lineHeight = Math.max(1.15, curLH - 0.05);
-      const contentEl = document.getElementById("resume-content");
-      if (contentEl) contentEl.style.lineHeight = state.layout.lineHeight;
+      if (typeof applyLineHeight === "function") applyLineHeight(state.layout.lineHeight);
     }
 
     // Re-render sections to apply new spacingBefore values
@@ -143,14 +163,9 @@ function autoFixOverflow() {
     result = checkOverflow();
   }
 
+  if (typeof applyLayoutState === "function") applyLayoutState(state);
   updateA4Status();
-
-  if (result.overflow) {
-    showToast(`仍超出约 ${result.mmBeyond.toFixed(1)} mm，建议手动删减内容。`, "warning");
-  } else {
-    showToast("已自动修复，A4 排版正常。", "success");
-    if (typeof markDirty === "function") markDirty();
-  }
+  if (typeof markDirty === "function") markDirty();
 }
 
 /**

@@ -10,7 +10,9 @@
 function renderResume(state) {
   renderHeader(state);
   renderSections(state);
+  if (typeof applyLayoutState === "function") applyLayoutState(state);
   if (typeof applyLocalFormatting === "function") applyLocalFormatting(state);
+  if (typeof applyHeaderPosition === "function") applyHeaderPosition(state);
   updateStatusInfo(state);
 }
 
@@ -51,19 +53,18 @@ function renderHeader(state) {
   if (contactEl) {
     contactEl.innerHTML = "";
     const items = [
-      profile.phone     && { field: "phone",     text: profile.phone },
-      profile.email     && { field: "email",     text: profile.email },
+      profile.phone && {
+        field: "phone",
+        text: profile.phone,
+      },
+      profile.email && {
+        field: "email",
+        text: profile.email,
+      },
       profile.portfolio && { field: "portfolio", text: profile.portfolio, link: true },
     ].filter(Boolean);
 
-    items.forEach(({ field, text, link }, index) => {
-      if (index > 0) {
-        const separator = document.createElement("span");
-        separator.className = "contact-separator";
-        separator.setAttribute("aria-hidden", "true");
-        separator.textContent = "｜";
-        contactEl.appendChild(separator);
-      }
+    items.forEach(({ field, text, link }) => {
       const item = document.createElement(link ? "a" : "span");
       item.className = `contact-item${link ? " contact-link" : ""}`;
       item.textContent = text;
@@ -96,11 +97,17 @@ function renderSections(state) {
     handle.dataset.sectionId = section.id;
     const line = document.createElement("div");
     line.className = "spacing-handle-line";
+    const calibration = document.createElement("div");
+    calibration.className = "spacing-calibration";
     const tip = document.createElement("span");
     tip.className = "spacing-tooltip";
-    const currentMm = (section.spacingBefore !== undefined) ? section.spacingBefore : 2;
+    const currentMm = (section.spacingBefore !== undefined) ? section.spacingBefore : 0;
     tip.textContent = currentMm.toFixed(1) + " mm";
+    handle.style.setProperty("--spacing-size", currentMm + "mm");
+    handle.setAttribute("aria-valuenow", String(currentMm));
+    handle.setAttribute("aria-valuetext", `${currentMm.toFixed(1)} 毫米`);
     handle.appendChild(line);
+    handle.appendChild(calibration);
     handle.appendChild(tip);
     container.appendChild(handle);
 
@@ -125,6 +132,22 @@ function renderSection(section) {
   sectionEl.className = "resume-section";
   sectionEl.dataset.sectionId = section.id;
   sectionEl.dataset.sectionType = section.type;
+
+  const dragHandle = document.createElement("button");
+  dragHandle.className = "section-drag-handle no-print";
+  dragHandle.type = "button";
+  dragHandle.dataset.sectionId = section.id;
+  dragHandle.textContent = "↕";
+  dragHandle.title = `上下拖动${section.title}；双击恢复`;
+  dragHandle.setAttribute("role", "slider");
+  dragHandle.setAttribute("aria-label", `上下调整${section.title}的位置`);
+  dragHandle.setAttribute("aria-valuemin", "-100");
+  dragHandle.setAttribute("aria-valuemax", "100");
+  dragHandle.setAttribute("aria-orientation", "vertical");
+  const sectionSpacingMm = section.spacingBefore !== undefined ? section.spacingBefore : 0;
+  dragHandle.setAttribute("aria-valuenow", String(sectionSpacingMm));
+  dragHandle.setAttribute("aria-valuetext", `${sectionSpacingMm.toFixed(1)} 毫米`);
+  sectionEl.appendChild(dragHandle);
 
   const titleEl = document.createElement("h2");
   titleEl.className = "section-title";
@@ -194,13 +217,6 @@ function renderEntry(entry) {
   const dateLocSpan = document.createElement("span");
   dateLocSpan.className = "entry-date-location";
 
-  const locationSpan = document.createElement("span");
-  locationSpan.className = "entry-location";
-  locationSpan.textContent = entry.location || "";
-  locationSpan.contentEditable = "plaintext-only";
-  locationSpan.dataset.entryField = "location";
-  dateLocSpan.appendChild(locationSpan);
-
   const dateSpan = document.createElement("span");
   dateSpan.className = "entry-date";
   dateSpan.textContent = entry.date || "";
@@ -243,6 +259,7 @@ function renderBulletRow(bullet) {
 
   const span = document.createElement("span");
   span.className = "bullet-item";
+  updateBulletSemanticClass(span, bullet.content);
   span.contentEditable = "plaintext-only";
   span.dataset.bulletId = bullet.id;
   if (bullet.markerStyle && bullet.markerStyle !== "default") {
@@ -259,6 +276,11 @@ function renderBulletRow(bullet) {
   li.appendChild(delBtn);
 
   return li;
+}
+
+function updateBulletSemanticClass(element, tokens) {
+  const text = (tokens || []).map((token) => token.value || "").join("");
+  element.classList.toggle("bullet-okr", /^\s*OKR\s*[：:]/i.test(text));
 }
 
 /**
@@ -293,6 +315,11 @@ function renderInlineContent(tokens) {
       strong.textContent = token.value;
       node = strong;
     }
+    if (node && token.italic) {
+      const emphasis = document.createElement("em");
+      emphasis.appendChild(node);
+      node = emphasis;
+    }
     if (token.fontSizeDelta) {
       const wrapper = node.nodeType === Node.ELEMENT_NODE ? node : document.createElement("span");
       if (wrapper !== node) wrapper.appendChild(node);
@@ -313,11 +340,23 @@ function renderPhoto(state) {
   const container = document.getElementById("photo-container");
   if (!container) return;
   const { photo } = state;
+  if (typeof applyPhotoFrameSize === "function") applyPhotoFrameSize(photo);
+  if (typeof applyPhotoFramePosition === "function") applyPhotoFramePosition(photo);
 
   const existingImg = container.querySelector("img");
   if (existingImg) existingImg.remove();
   const existingDelete = container.querySelector(".photo-delete-btn");
   if (existingDelete) existingDelete.remove();
+  const existingMove = container.querySelector(".photo-frame-handle");
+  if (existingMove) existingMove.remove();
+
+  const moveButton = document.createElement("button");
+  moveButton.className = "photo-frame-handle no-print";
+  moveButton.type = "button";
+  moveButton.textContent = "✥";
+  moveButton.title = "拖动照片框；双击恢复位置";
+  moveButton.setAttribute("aria-label", "移动照片框");
+  container.appendChild(moveButton);
 
   if (!photo.dataUrl) {
     container.dataset.empty = "true";
@@ -333,11 +372,11 @@ function renderPhoto(state) {
   container.removeAttribute("aria-label");
   const img = document.createElement("img");
   img.src = photo.dataUrl;
-  img.style.width = `${container.clientWidth}px`;
+  img.style.width = "100%";
   img.style.height = "auto";
-  img.style.transform = `translate(${photo.offsetX}px, ${photo.offsetY}px) scale(${photo.scale})`;
   img.draggable = false;
   container.appendChild(img);
+  if (typeof applyPhotoTransform === "function") applyPhotoTransform(photo);
 
   const deleteButton = document.createElement("button");
   deleteButton.className = "photo-delete-btn no-print";

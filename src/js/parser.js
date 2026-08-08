@@ -307,8 +307,7 @@ function parseSections(lines, startLine, errors) {
 }
 
 /**
- * Parse bold tokens (**text**) from a string.
- * Only supports inline, non-nested bold.
+ * Parse supported inline emphasis: **bold**, *italic*, and ***both***.
  * @param {string} text
  * @param {number} line
  * @param {object[]} errors
@@ -319,7 +318,7 @@ function parseBoldTokens(text, line, errors) {
   let remaining = text;
 
   while (remaining.length > 0) {
-    const openIdx = remaining.indexOf("**");
+    const openIdx = remaining.indexOf("*");
     if (openIdx === -1) {
       if (remaining) {
         tokens.push({ type: "text", value: remaining });
@@ -327,33 +326,37 @@ function parseBoldTokens(text, line, errors) {
       break;
     }
 
-    // Text before bold
     if (openIdx > 0) {
       tokens.push({ type: "text", value: remaining.slice(0, openIdx) });
     }
 
-    // Find closing **
-    const afterOpen = remaining.slice(openIdx + 2);
-    const closeIdx = afterOpen.indexOf("**");
+    const marker = remaining.startsWith("***", openIdx)
+      ? "***"
+      : remaining.startsWith("**", openIdx) ? "**" : "*";
+    const afterOpen = remaining.slice(openIdx + marker.length);
+    const closeIdx = afterOpen.indexOf(marker);
 
     if (closeIdx === -1) {
-      // Unclosed bold
       errors.push({
         level: "warning",
-        code: "UNCLOSED_BOLD",
-        message: `加粗标记 ** 未闭合（第 ${line + 1} 行）。`,
+        code: "UNCLOSED_EMPHASIS",
+        message: `格式标记 ${marker} 未闭合（第 ${line + 1} 行）。`,
         line: line + 1,
       });
       tokens.push({ type: "text", value: remaining.slice(openIdx) });
       break;
     }
 
-    const boldText = afterOpen.slice(0, closeIdx);
-    if (boldText) {
-      tokens.push({ type: "strong", value: boldText });
+    const value = afterOpen.slice(0, closeIdx);
+    if (value) {
+      tokens.push({
+        type: marker === "*" ? "text" : "strong",
+        value,
+        ...(marker === "*" || marker === "***" ? { italic: true } : {}),
+      });
     }
 
-    remaining = afterOpen.slice(closeIdx + 2);
+    remaining = afterOpen.slice(closeIdx + marker.length);
   }
 
   return tokens;

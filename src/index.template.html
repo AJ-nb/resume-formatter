@@ -25,14 +25,38 @@
         </details>
       </div>
       <div class="toolbar-group toolbar-typesetting">
-        <label class="toolbar-control">
-          <span>行高 <output id="line-height-value">1.40</output></span>
-          <input type="range" id="line-height-slider" class="toolbar-range" min="1.15" max="1.8" step="0.05" value="1.4" title="调整行高">
-        </label>
-        <label class="toolbar-control">
-          <span>字号 <output id="font-size-value">9pt</output></span>
-          <input type="range" id="font-size-slider" class="toolbar-range" min="7" max="12" step="0.5" value="9" title="调整正文字号">
-        </label>
+        <div class="toolbar-global-controls">
+          <label class="toolbar-control">
+            <span>行高 <output id="line-height-value">1.57</output></span>
+            <input type="range" id="line-height-slider" class="toolbar-range" min="1.15" max="1.8" step="0.01" value="1.57" title="调整行高">
+          </label>
+          <label class="toolbar-control">
+            <span>字号 <output id="font-size-value">10pt</output></span>
+            <input type="range" id="font-size-slider" class="toolbar-range" min="7" max="12" step="0.1" value="10" title="调整正文字号">
+          </label>
+          <label class="toolbar-control">
+            <span>照片 <output id="photo-size-value">100%</output></span>
+            <input type="range" id="photo-size-slider" class="toolbar-range" min="40" max="200" step="5" value="100" title="等比例调整照片框大小">
+          </label>
+        </div>
+        <div class="selection-format-controls" aria-label="选区格式">
+          <span class="toolbar-label">选区</span>
+          <button id="btn-selection-bold" class="toolbar-icon-btn" title="加粗或取消加粗" aria-label="加粗或取消加粗" disabled><strong>B</strong></button>
+          <button id="btn-selection-italic" class="toolbar-icon-btn toolbar-icon-italic" title="斜体或取消斜体" aria-label="斜体或取消斜体" disabled>I</button>
+          <button id="btn-selection-smaller" class="toolbar-icon-btn" title="选区字号缩小 0.5pt" disabled>A-</button>
+          <button id="btn-selection-larger" class="toolbar-icon-btn" title="选区字号增大 0.5pt" disabled>A+</button>
+          <button id="btn-selection-reset" class="toolbar-icon-btn" title="清除选区字号微调" aria-label="清除选区字号微调" disabled>↺</button>
+          <label class="selection-bullet-control" title="更换项目符号">
+            <select id="selection-bullet-style" class="toolbar-bullet-select" aria-label="项目符号" disabled>
+              <option value="default">模板符号</option>
+              <option value="none">无符号</option>
+              <option value="disc">● 实心圆</option>
+              <option value="circle">○ 空心圆</option>
+              <option value="square">▪ 方块</option>
+              <option value="arrow">➤ 箭头</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-info">
@@ -53,28 +77,21 @@
           </button>
         </div>
         <div class="photo-controls" hidden>
-          <label class="toolbar-label">缩放</label>
+          <label class="toolbar-label">裁切</label>
           <input type="range" id="photo-scale" class="toolbar-range" min="0.5" max="2" step="0.01" value="1">
           <button id="btn-photo-reset" class="toolbar-btn" title="恢复照片默认位置">重置</button>
         </div>
       </div>
       <div class="toolbar-group toolbar-primary-actions">
+        <button id="btn-fix-overflow" class="toolbar-btn" title="修复 A4 内容溢出" hidden>
+          <span class="btn-label" id="btn-fix-label">修复溢出</span>
+        </button>
         <button id="btn-save" class="toolbar-btn toolbar-btn-primary" title="在右侧创建 Markdown 快照">
-          <span class="btn-label">保存快照</span>
+          <span class="btn-label">快照</span>
         </button>
         <button id="btn-export-pdf" class="toolbar-btn" title="通过浏览器导出 PDF">
           <span class="btn-label">导出 PDF</span>
         </button>
-        <details class="toolbar-menu" id="more-menu">
-          <summary class="toolbar-btn toolbar-more-btn" title="更多操作" aria-label="更多操作">···</summary>
-          <div class="toolbar-popover toolbar-more-options">
-            <button id="btn-fix-overflow" class="toolbar-btn" title="检测到溢出时自动修复 A4 排版">
-              <span class="btn-label" id="btn-fix-label">检查 A4</span>
-            </button>
-            <button id="btn-restore-import" class="toolbar-btn" title="恢复最近一次导入的内容">恢复导入内容</button>
-            <button id="btn-save-as" class="toolbar-btn" title="创建命名 Markdown 快照">命名快照</button>
-          </div>
-        </details>
       </div>
     </aside>
 
@@ -84,6 +101,11 @@
         <div id="resume-content">
           <header id="resume-header">
             <div id="header-info">
+              <button id="header-position-handle" class="header-position-handle no-print" type="button"
+                title="上下拖动姓名区域；双击恢复居中" aria-label="上下调整姓名区域位置">
+                <span aria-hidden="true">↕</span>
+                <span class="header-position-value" aria-hidden="true">0.0 mm</span>
+              </button>
               <h1 id="profile-name" class="editable-placeholder" data-empty="true" data-placeholder="姓名"></h1>
               <p id="profile-headline" class="editable-placeholder" data-empty="true" data-placeholder="求职方向"></p>
               <div id="contact-info"></div>
@@ -98,56 +120,58 @@
     <aside id="resume-list-panel">
       <div class="panel-header">
         <span id="panel-dir-name" class="panel-dir-name" title="">简历版本</span>
-        <button id="btn-pick-dir" class="panel-icon-btn" title="选择简历目录">📂</button>
+        <details class="toolbar-menu panel-import-menu" id="import-menu">
+          <summary class="toolbar-btn panel-import-btn" title="导入简历内容">
+            <span>导入</span>
+            <span class="toolbar-caret">⌄</span>
+          </summary>
+          <div class="toolbar-popover toolbar-action-options">
+            <div class="toolbar-menu-section">
+              <button id="btn-pick-dir" class="toolbar-btn" title="选择文件夹并识别其中的 Markdown 和 JSON">导入文件夹</button>
+              <button id="btn-import-md" class="toolbar-btn" title="导入单个 Markdown 文件">导入 Markdown</button>
+              <button id="btn-import-json-file" class="toolbar-btn" title="导入单个 JSON 文件">导入 JSON</button>
+            </div>
+            <div class="toolbar-menu-section toolbar-menu-secondary">
+              <button id="btn-paste-md" class="toolbar-btn" title="粘贴 Markdown 内容">粘贴 Markdown</button>
+              <button id="btn-paste-json" class="toolbar-btn" title="粘贴 JSON 内容">粘贴 JSON</button>
+              <button id="btn-show-md-example" class="toolbar-btn" title="查看 Markdown 格式示例">Markdown 示例</button>
+              <button id="btn-show-json-example" class="toolbar-btn" title="查看 JSON 格式示例">JSON 示例</button>
+            </div>
+          </div>
+        </details>
+        <details class="toolbar-menu panel-import-menu" id="prompt-menu">
+          <summary class="toolbar-btn panel-import-btn" title="复制文件转换提示词">
+            <span id="prompt-menu-label">转换提示词</span>
+            <span class="toolbar-caret">⌄</span>
+          </summary>
+          <div class="toolbar-popover toolbar-action-options toolbar-prompt-options">
+            <div class="toolbar-menu-heading">PDF 简历</div>
+            <div class="toolbar-prompt-actions">
+              <button id="btn-copy-pdf-to-md" class="toolbar-btn" title="复制 PDF 转 Markdown 提示词">转 Markdown</button>
+              <button id="btn-copy-pdf-to-json" class="toolbar-btn" title="复制 PDF 转 JSON 提示词">转 JSON</button>
+            </div>
+            <div class="toolbar-menu-heading">Word / DOCX 简历</div>
+            <div class="toolbar-prompt-actions">
+              <button id="btn-copy-docx-to-md" class="toolbar-btn" title="复制 Word 转 Markdown 提示词">转 Markdown</button>
+              <button id="btn-copy-docx-to-json" class="toolbar-btn" title="复制 Word 转 JSON 提示词">转 JSON</button>
+            </div>
+          </div>
+        </details>
         <button id="btn-refresh-dir" class="panel-icon-btn" title="刷新列表" hidden>↻</button>
       </div>
+      <div id="panel-import-status" class="panel-import-status" role="status" aria-live="polite" hidden></div>
       <ul id="resume-list"></ul>
       <div id="panel-empty" class="panel-empty">
-        点击 📂 选择<br>简历目录
+        暂无导入文件
       </div>
-      <details class="panel-tools">
-        <summary>导入与转换</summary>
-        <div class="panel-tools-content">
-          <section class="panel-tool-section">
-            <h3>Markdown</h3>
-            <div class="panel-tool-actions">
-              <button id="btn-import-md" class="panel-action-btn" title="导入 .md 文件">导入</button>
-              <button id="btn-paste-md" class="panel-action-btn" title="粘贴 Markdown">粘贴</button>
-              <button id="btn-show-md-example" class="panel-action-btn" title="查看 Markdown 示例">示例</button>
-            </div>
-          </section>
-          <section class="panel-tool-section">
-            <h3>JSON</h3>
-            <div class="panel-tool-actions">
-              <button id="btn-import-json-file" class="panel-action-btn" title="导入 .json 文件">导入</button>
-              <button id="btn-paste-json" class="panel-action-btn" title="粘贴 JSON">粘贴</button>
-              <button id="btn-show-json-example" class="panel-action-btn" title="查看 JSON 示例">示例</button>
-            </div>
-          </section>
-          <section class="panel-tool-section panel-prompt-section">
-            <h3>复制转换 Prompt</h3>
-            <p>将 Prompt 和原简历交给支持文件读取的 AI，再导入返回结果。</p>
-            <div class="panel-prompt-row">
-              <span>PDF</span>
-              <button id="btn-copy-pdf-to-md" class="panel-action-btn" title="复制 PDF 转 Markdown Prompt">Markdown</button>
-              <button id="btn-copy-pdf-to-json" class="panel-action-btn" title="复制 PDF 转 JSON Prompt">JSON</button>
-            </div>
-            <div class="panel-prompt-row">
-              <span>Word</span>
-              <button id="btn-copy-docx-to-md" class="panel-action-btn" title="复制 DOCX 转 Markdown Prompt">Markdown</button>
-              <button id="btn-copy-docx-to-json" class="panel-action-btn" title="复制 DOCX 转 JSON Prompt">JSON</button>
-            </div>
-          </section>
-        </div>
-      </details>
     </aside>
 
     <div id="status-region"></div>
     <div id="dialog-root"></div>
   </div>
 
-  <input type="file" id="file-input-md" accept=".md" hidden>
-  <input type="file" id="file-input-directory" accept=".md,text/markdown" multiple hidden>
+  <input type="file" id="file-input-md" accept=".md,.markdown,text/markdown,text/plain" hidden>
+  <input type="file" id="file-input-directory" accept=".md,.markdown,.json,text/markdown,text/plain,application/json" webkitdirectory directory multiple hidden>
   <input type="file" id="file-input-json" accept=".json,application/json" hidden>
   <input type="file" id="file-input-photo" accept="image/jpeg,image/png,image/webp" hidden>
 
