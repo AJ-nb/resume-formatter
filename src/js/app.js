@@ -573,7 +573,7 @@ function initResumeListPanel() {
   const directoryInput = document.getElementById("file-input-directory");
 
   if (directoryInput) {
-    directoryInput.addEventListener("change", () => {
+    directoryInput.addEventListener("change", async () => {
       const selectedFiles = Array.from(directoryInput.files || []);
       if (selectedFiles.length === 0) return;
 
@@ -582,25 +582,25 @@ function initResumeListPanel() {
       setDirectoryImportStatus("正在识别文件夹中的简历文件...");
       _dirHandle = null;
       const supportedFiles = selectedFiles.filter((file) => /\.(?:md|markdown|json)$/i.test(file.name));
-      if (supportedFiles.length === 0) {
+      const firstPath = supportedFiles[0]?.webkitRelativePath || selectedFiles[0]?.webkitRelativePath || "";
+      const rootName = firstPath.includes("/") ? firstPath.split("/")[0] : "导入文件夹";
+      const candidates = supportedFiles.map((file) => ({
+        name: stripDirectoryRoot(file.webkitRelativePath || file.name, rootName),
+        handle: { getFile: async () => file },
+      }));
+      const files = await filterRecognizableResumeFiles(candidates, sequence);
+      if (sequence !== _directoryImportSequence) return;
+      if (files.length === 0) {
         setDirectoryImportBusy(false);
-        setDirectoryImportStatus("未找到 Markdown 或 JSON 文件。", "error");
+        setDirectoryImportStatus("未找到可识别的 Markdown 或 JSON 简历。", "error");
         showDialog({
-          title: "没有可导入的文件",
-          message: "所选文件夹中没有 Markdown 或 JSON 文件。",
+          title: "没有可识别的简历",
+          message: "所选文件夹中没有符合当前简历格式的 Markdown 或 JSON 文件。",
           buttons: [{ text: "好的", primary: true }],
         });
         directoryInput.value = "";
         return;
       }
-      const firstPath = supportedFiles[0].webkitRelativePath || "";
-      const rootName = firstPath.includes("/") ? firstPath.split("/")[0] : "导入文件夹";
-      const files = supportedFiles
-        .map((file) => ({
-          name: stripDirectoryRoot(file.webkitRelativePath || file.name, rootName),
-          handle: { getFile: async () => file },
-        }));
-      if (sequence !== _directoryImportSequence) return;
       renderResumeFileList(files, rootName, false);
       setDirectoryImportBusy(false);
       setDirectoryImportStatus(`已识别 ${files.length} 个文件，请在下方选择要打开的简历。`, "success");
@@ -624,7 +624,7 @@ function initResumeListPanel() {
       setDirectoryImportBusy(true);
       setDirectoryImportStatus("等待选择文件夹...");
       try {
-        const handle = await window.showDirectoryPicker({ mode: "read" });
+        const handle = await window.showDirectoryPicker({ mode: "readwrite" });
         if (sequence !== _directoryImportSequence) return;
         _dirHandle = handle;
         setDirectoryImportStatus("正在扫描文件夹中的简历文件...");
@@ -633,10 +633,10 @@ function initResumeListPanel() {
         if (sequence !== _directoryImportSequence) return;
         setDirectoryImportBusy(false);
         if (files.length === 0) {
-          setDirectoryImportStatus("未找到 Markdown 或 JSON 文件。", "error");
+          setDirectoryImportStatus("未找到可识别的 Markdown 或 JSON 简历。", "error");
           showDialog({
-            title: "没有可导入的文件",
-            message: "所选文件夹中没有 Markdown 或 JSON 文件。",
+            title: "没有可识别的简历",
+            message: "所选文件夹中没有符合当前简历格式的 Markdown 或 JSON 文件。",
             buttons: [{ text: "好的", primary: true }],
           });
         } else {
@@ -762,18 +762,201 @@ function showReauthNotice(handle) {
 async function refreshResumeList(sequence = _directoryImportSequence) {
   if (!_dirHandle) return [];
 
-  // Collect supported resume files recursively so versions can live in subfolders.
-  const files = [];
-  await collectResumeFiles(_dirHandle, "", files);
+  // Collect supported candidates recursively, then validate with bounded concurrency.
+  const candidates = [];
+  await collectResumeFiles(_dirHandle, "", candidates);
+  const files = await filterRecognizableResumeFiles(candidates, sequence);
 
   if (sequence !== _directoryImportSequence) return files;
   renderResumeFileList(files, _dirHandle.name, true);
   return files;
 }
 
+async function isRecognizableResumeFile(file, fileName) {
+  if (!/\.(?:md|markdown|json)$/i.test(fileName)) return false;
+  try {
+    const raw = await file.text();
+    const validation = /\.json$/i.test(fileName)
+      ? importJsonResume(raw, fileName)
+      : validateAndBuildState(parseMarkdown(raw), fileName);
+    return Boolean(validation.state);
+  } catch (e) {
+    console.warn(`Skipped unrecognized resume file: ${fileName}`, e);
+    return false;
+  }
+}
+
+async function filterRecognizableResumeFiles(candidates, sequence) {
+  const recognized = new Array(candidates.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(8, candidates.length);
+
+  async function validateNext() {
+    while (nextIndex < candidates.length && sequence === _directoryImportSequence) {
+      const index = nextIndex++;
+      const candidate = candidates[index];
+      try {
+        const file = await candidate.handle.getFile();
+        if (await isRecognizableResumeFile(file, candidate.name)) {
+          recognized[index] = candidate;
+        }
+      } catch (e) {
+        console.warn(`Skipped unreadable resume file: ${candidate.name}`, e);
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => validateNext()));
+  return recognized.filter(Boolean);
+}
+
 function stripDirectoryRoot(path, rootName) {
   const prefix = `${rootName}/`;
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+async function ensureDirectoryWritePermission() {
+  if (!_dirHandle) return false;
+  try {
+    let permission = await _dirHandle.queryPermission({ mode: "readwrite" });
+    if (permission !== "granted") {
+      permission = await _dirHandle.requestPermission({ mode: "readwrite" });
+    }
+    return permission === "granted";
+  } catch (e) {
+    console.warn("Failed to request directory write permission:", e);
+    return false;
+  }
+}
+
+function showDirectoryWriteRequired() {
+  showDialog({
+    title: "需要文件夹写入权限",
+    message: "请使用“导入文件夹”重新选择该目录并允许读写，才能重命名或删除其中的文件。",
+    buttons: [{ text: "好的", primary: true }],
+  });
+}
+
+async function deleteDirectoryResume(file) {
+  if (!file.parentDirectory || !file.entryName) {
+    showDirectoryWriteRequired();
+    return;
+  }
+  if (!await ensureDirectoryWritePermission()) {
+    showDirectoryWriteRequired();
+    return;
+  }
+
+  try {
+    await file.parentDirectory.removeEntry(file.entryName);
+    if (_activeFile === `source:${file.name}`) _activeFile = null;
+    try {
+      await refreshResumeList();
+    } catch (refreshError) {
+      console.warn("Failed to refresh after deleting resume file:", refreshError);
+    }
+    showToast(`已删除“${file.name}”。`, "success");
+  } catch (e) {
+    console.error("Failed to delete resume file:", e);
+    showDialog({
+      title: "删除失败",
+      message: `无法删除“${file.name}”：${e.message || "未知错误"}`,
+      buttons: [{ text: "好的", primary: true }],
+    });
+  }
+}
+
+function confirmDeleteDirectoryResume(file) {
+  const fileType = /\.json$/i.test(file.name) ? "JSON" : "Markdown";
+  showDialog({
+    title: `删除 ${fileType} 文件`,
+    message: `确定删除“${file.name}”吗？\n\n确认后将从原目录中永久删除该文件，此操作无法在排版器中撤销。`,
+    buttons: [
+      { text: "取消" },
+      { text: "确认删除", action: () => deleteDirectoryResume(file) },
+    ],
+  });
+}
+
+function renameDirectoryResume(file) {
+  if (!file.parentDirectory || !file.entryName) {
+    showDirectoryWriteRequired();
+    return;
+  }
+
+  const extensionMatch = file.entryName.match(/(\.(?:md|markdown|json))$/i);
+  const extension = extensionMatch ? extensionMatch[1] : "";
+  const baseName = extension ? file.entryName.slice(0, -extension.length) : file.entryName;
+  showInputDialog({
+    title: "重命名简历文件",
+    message: `文件位置：${file.name}`,
+    defaultValue: baseName,
+    confirmText: "重命名",
+    onSubmit: async (name) => {
+      const sanitized = sanitizeFileName(name).replace(/\.(?:md|markdown|json)$/i, "");
+      const nextEntryName = `${sanitized}${extension}`;
+      if (!sanitized || nextEntryName === file.entryName) return;
+      if (!await ensureDirectoryWritePermission()) {
+        showDirectoryWriteRequired();
+        return;
+      }
+
+      try {
+        try {
+          await file.parentDirectory.getFileHandle(nextEntryName);
+          showDialog({
+            title: "无法重命名",
+            message: `同一目录中已存在“${nextEntryName}”。`,
+            buttons: [{ text: "好的", primary: true }],
+          });
+          return;
+        } catch (e) {
+          if (e.name !== "NotFoundError") throw e;
+        }
+
+        const source = await file.handle.getFile();
+        const nextHandle = await file.parentDirectory.getFileHandle(nextEntryName, { create: true });
+        const writable = await nextHandle.createWritable();
+        try {
+          await writable.write(source);
+          await writable.close();
+        } catch (e) {
+          try {
+            await writable.abort();
+          } catch {}
+          try {
+            await file.parentDirectory.removeEntry(nextEntryName);
+          } catch {}
+          throw e;
+        }
+        try {
+          await file.parentDirectory.removeEntry(file.entryName);
+        } catch (e) {
+          try {
+            await file.parentDirectory.removeEntry(nextEntryName);
+          } catch {}
+          throw e;
+        }
+
+        const parentPath = file.name.includes("/") ? file.name.slice(0, file.name.lastIndexOf("/") + 1) : "";
+        const nextName = `${parentPath}${nextEntryName}`;
+        if (_activeFile === `source:${file.name}`) _activeFile = `source:${nextName}`;
+        try {
+          await refreshResumeList();
+        } catch (refreshError) {
+          console.warn("Failed to refresh after renaming resume file:", refreshError);
+        }
+        showToast(`已重命名为“${nextName}”。`, "success");
+      } catch (e) {
+        console.error("Failed to rename resume file:", e);
+        showDialog({
+          title: "重命名失败",
+          message: `无法重命名“${file.name}”：${e.message || "未知错误"}`,
+          buttons: [{ text: "好的", primary: true }],
+        });
+      }
+    },
+  });
 }
 
 function setDirectoryImportBusy(isBusy) {
@@ -883,13 +1066,41 @@ function renderResumeFileList(files, directoryName, canRefresh) {
     }
 
     if (sourceFiles.length > 0) appendHeading("目录文件");
-    for (const { name, handle } of sourceFiles) {
+    for (const file of sourceFiles) {
+      const { name, handle } = file;
+      const displayName = file.entryName || name.split("/").pop() || name;
       const versionKey = `source:${name}`;
       const li = document.createElement("li");
-      li.className = "resume-list-item" + (versionKey === _activeFile ? " active" : "");
-      li.textContent = name.replace(/\.(?:md|markdown|json)$/i, "");
-      li.title = name;
+      li.className = "resume-list-item resume-list-source" + (versionKey === _activeFile ? " active" : "");
+      li.title = displayName;
       li.dataset.versionKey = versionKey;
+
+      const label = document.createElement("span");
+      label.textContent = displayName.replace(/\.(?:md|markdown|json)$/i, "");
+      li.appendChild(label);
+
+      const renameButton = document.createElement("button");
+      renameButton.className = "resume-list-action resume-list-rename";
+      renameButton.textContent = "✎";
+      renameButton.title = "重命名文件";
+      renameButton.setAttribute("aria-label", `重命名 ${displayName}`);
+      renameButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        renameDirectoryResume(file);
+      });
+      li.appendChild(renameButton);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.className = "resume-list-action resume-list-delete";
+      deleteButton.textContent = "×";
+      deleteButton.title = /\.json$/i.test(name) ? "删除 JSON 文件" : "删除 Markdown 文件";
+      deleteButton.setAttribute("aria-label", `删除 ${displayName}`);
+      deleteButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        confirmDeleteDirectoryResume(file);
+      });
+      li.appendChild(deleteButton);
+
       li.addEventListener("click", () => loadResumeFromHandle(name, handle, versionKey));
       list.appendChild(li);
     }
@@ -903,17 +1114,17 @@ function renderResumeFileList(files, directoryName, canRefresh) {
 }
 
 /**
- * Recursively collect Markdown and JSON files from a directory.
+ * Recursively collect Markdown and JSON candidates for resume validation.
  * @param {FileSystemDirectoryHandle} directory
  * @param {string} prefix
- * @param {Array<{name:string, handle:FileSystemFileHandle}>} files
+ * @param {Array<{name:string, handle:FileSystemFileHandle, parentDirectory:FileSystemDirectoryHandle, entryName:string}>} files
  */
 async function collectResumeFiles(directory, prefix, files) {
   for await (const [name, handle] of directory.entries()) {
     if (name.startsWith(".")) continue;
     const relativeName = prefix ? `${prefix}/${name}` : name;
     if (handle.kind === "file" && /\.(?:md|markdown|json)$/i.test(name)) {
-      files.push({ name: relativeName, handle });
+      files.push({ name: relativeName, handle, parentDirectory: directory, entryName: name });
     } else if (handle.kind === "directory") {
       await collectResumeFiles(handle, relativeName, files);
     }

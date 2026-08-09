@@ -628,13 +628,15 @@ body {
   text-transform: uppercase;
 }
 
-.resume-list-snapshot {
+.resume-list-snapshot,
+.resume-list-source {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.resume-list-snapshot > span {
+.resume-list-snapshot > span,
+.resume-list-source > span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -655,7 +657,7 @@ body {
   opacity: 0;
 }
 
-.resume-list-snapshot:hover .resume-list-action,
+.resume-list-item:hover .resume-list-action,
 .resume-list-action:focus-visible {
   opacity: 1;
 }
