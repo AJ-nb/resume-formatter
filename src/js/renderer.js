@@ -26,6 +26,20 @@ function getTheme() {
   return (t === "b" || t === "c" || t === "d") ? t : "a";
 }
 
+function getPortfolioContact(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  const urlMatch = raw.match(/https?:\/\/[^\s|｜]+/i);
+  const href = urlMatch ? urlMatch[0] : "";
+  let label = href
+    ? raw.slice(0, urlMatch.index).replace(/[\s|｜:：-]+$/g, "").trim()
+    : raw;
+  if (!label || /^AI\s*作品集$/i.test(label)) label = "AI作品集";
+
+  return { label, href };
+}
+
 /**
  * Render header — behaviour differs by theme.
  * @param {object} state
@@ -52,6 +66,7 @@ function renderHeader(state) {
   const contactEl = document.getElementById("contact-info");
   if (contactEl) {
     contactEl.innerHTML = "";
+    const portfolio = getPortfolioContact(profile.portfolio);
     const items = [
       profile.phone && {
         field: "phone",
@@ -61,17 +76,17 @@ function renderHeader(state) {
         field: "email",
         text: profile.email,
       },
-      profile.portfolio && { field: "portfolio", text: profile.portfolio, link: true },
+      portfolio && { field: "portfolio", text: portfolio.label, href: portfolio.href },
     ].filter(Boolean);
 
-    items.forEach(({ field, text, link }) => {
-      const item = document.createElement(link ? "a" : "span");
-      item.className = `contact-item${link ? " contact-link" : ""}`;
+    items.forEach(({ field, text, href }) => {
+      const item = document.createElement(href ? "a" : "span");
+      item.className = `contact-item${href ? " contact-link" : ""}`;
       item.textContent = text;
       item.dataset.profileField = field;
-      item.contentEditable = "plaintext-only";
-      if (link) {
-        item.href = /^(?:https?:\/\/|mailto:)/i.test(text) ? text : `https://${text}`;
+      if (field !== "portfolio") item.contentEditable = "plaintext-only";
+      if (href) {
+        item.href = href;
         item.target = "_blank";
         item.rel = "noopener noreferrer";
       }
