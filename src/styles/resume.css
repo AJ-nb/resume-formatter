@@ -138,6 +138,7 @@
    ======================== */
 .bullet-row { position: relative; display: block; }
 .bullet-row .bullet-item { display: block; width: 100%; }
+.inline-link { color: #152fb4; text-decoration: underline; text-underline-offset: 0.08em; }
 .btn-del-bullet, .btn-del-entry {
   position: absolute; right: -20px; top: 50%; transform: translateY(-50%);
   opacity: 0; border: none; background: none; cursor: pointer;

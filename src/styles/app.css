@@ -792,6 +792,32 @@ body {
   background: #e5352a;
 }
 
+.dialog-btn-leading { margin-right: auto; }
+
+.dialog-field {
+  display: block;
+  margin: 14px 0 0;
+}
+
+.dialog-field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.dialog-field .dialog-input { margin-bottom: 0; }
+
+.dialog-field-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dialog-field-error + .dialog-actions { margin-top: 20px; }
+
 .dialog-input {
   width: 100%;
   padding: 8px 12px;

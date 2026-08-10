@@ -83,6 +83,8 @@ function initEditor() {
   });
 
   content.addEventListener("click", (e) => {
+    const link = e.target.closest("a.inline-link");
+    if (link && !e.metaKey && !e.ctrlKey) e.preventDefault();
     const btn = e.target.closest("button");
     if (!btn) return;
     if (btn.classList.contains("btn-del-bullet"))  { e.stopPropagation(); deleteBullet(btn.dataset.bulletId); }
@@ -100,6 +102,7 @@ function initSelectionFormatting() {
   const buttons = {
     bold: document.getElementById("btn-selection-bold"),
     italic: document.getElementById("btn-selection-italic"),
+    link: document.getElementById("btn-selection-link"),
     smaller: document.getElementById("btn-selection-smaller"),
     larger: document.getElementById("btn-selection-larger"),
     reset: document.getElementById("btn-selection-reset"),
@@ -128,8 +131,10 @@ function initSelectionFormatting() {
     _formatRange = range.cloneRange();
     _formatOffsets = getSelectionOffsets(target, range);
     Object.values(buttons).forEach((button) => { if (button) button.disabled = false; });
+    if (buttons.link) buttons.link.disabled = !target.dataset.bulletId;
     updateBoldButtonState(buttons.bold);
     updateItalicButtonState(buttons.italic);
+    updateLinkButtonState(buttons.link);
   });
 
   Object.values(buttons).forEach((button) => {
@@ -137,6 +142,7 @@ function initSelectionFormatting() {
   });
   if (buttons.bold) buttons.bold.addEventListener("click", () => applySelectionFormat("bold"));
   if (buttons.italic) buttons.italic.addEventListener("click", () => applySelectionFormat("italic"));
+  if (buttons.link) buttons.link.addEventListener("click", openSelectionLinkDialog);
   if (buttons.smaller) buttons.smaller.addEventListener("click", () => applySelectionFormat("size", -0.5));
   if (buttons.larger) buttons.larger.addEventListener("click", () => applySelectionFormat("size", 0.5));
   if (buttons.reset) buttons.reset.addEventListener("click", () => applySelectionFormat("reset"));
@@ -288,6 +294,7 @@ function mergeInlineTokens(tokens) {
     if (!token.value) return merged;
     const previous = merged[merged.length - 1];
     if (previous && previous.type === token.type && !!previous.italic === !!token.italic
+      && (previous.href || "") === (token.href || "")
       && (previous.fontSizeDelta || 0) === (token.fontSizeDelta || 0)) {
       previous.value += token.value;
     } else {
@@ -295,6 +302,204 @@ function mergeInlineTokens(tokens) {
     }
     return merged;
   }, []);
+}
+
+function findLinkTokenRange(tokens, offset) {
+  let cursor = 0;
+  for (const token of (tokens || [])) {
+    const end = cursor + (token.value || "").length;
+    if (token.href && offset >= cursor && offset <= end) {
+      return { start: cursor, end, token };
+    }
+    cursor = end;
+  }
+  return null;
+}
+
+function replaceInlineRange(tokens, start, end, replacement) {
+  if (start === end) {
+    const result = [];
+    let cursor = 0;
+    let inserted = false;
+    for (const token of (tokens || [])) {
+      const value = token.value || "";
+      const tokenEnd = cursor + value.length;
+      if (!inserted && start >= cursor && start <= tokenEnd) {
+        const localOffset = start - cursor;
+        if (localOffset > 0) result.push({ ...token, value: value.slice(0, localOffset) });
+        result.push(replacement);
+        if (localOffset < value.length) result.push({ ...token, value: value.slice(localOffset) });
+        inserted = true;
+      } else {
+        result.push({ ...token });
+      }
+      cursor = tokenEnd;
+    }
+    if (!inserted) result.push(replacement);
+    return mergeInlineTokens(result);
+  }
+
+  const parts = splitTokensForRange(tokens, start, end);
+  const result = [];
+  let inserted = false;
+  for (const part of parts) {
+    if (part.selected) {
+      if (!inserted) {
+        result.push(replacement);
+        inserted = true;
+      }
+    } else {
+      result.push(part.token);
+    }
+  }
+  return mergeInlineTokens(result);
+}
+
+function normalizeLinkTarget(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const candidate = /^(?:https?:\/\/|mailto:)/i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(candidate);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? candidate : "";
+  } catch {
+    return "";
+  }
+}
+
+function openSelectionLinkDialog() {
+  const target = _formatTarget;
+  if (!target || !target.dataset.bulletId) return;
+  syncElementToState(target);
+  const bullet = findBulletById(target.dataset.bulletId);
+  const offsets = _formatOffsets || getSelectionOffsets(target, _formatRange);
+  if (!bullet || !offsets) return;
+
+  const existing = findLinkTokenRange(bullet.content, offsets.start);
+  const isEditingExisting = Boolean(existing && offsets.end <= existing.end);
+  const start = isEditingExisting ? existing.start : offsets.start;
+  const end = isEditingExisting ? existing.end : offsets.end;
+  const existingStyle = isEditingExisting
+    ? Object.fromEntries(Object.entries(existing.token).filter(([key]) => !["value", "href"].includes(key)))
+    : { type: "text" };
+  const selectedName = isEditingExisting
+    ? existing.token.value
+    : splitTokensForRange(bullet.content, offsets.start, offsets.end)
+      .filter((part) => part.selected)
+      .map((part) => part.token.value)
+      .join("");
+
+  showLinkDialog({
+    name: selectedName,
+    url: isEditingExisting ? existing.token.href : "",
+    canRemove: isEditingExisting,
+    onSubmit: (name, href) => {
+      pushUndoState();
+      bullet.content = replaceInlineRange(bullet.content, start, end, { ...existingStyle, value: name, href });
+      target.replaceChildren(renderInlineContent(bullet.content));
+      markDirty();
+      requestAnimationFrame(() => updateA4Status());
+    },
+    onRemove: isEditingExisting ? () => {
+      pushUndoState();
+      bullet.content = replaceInlineRange(bullet.content, start, end, { ...existingStyle, value: existing.token.value });
+      target.replaceChildren(renderInlineContent(bullet.content));
+      markDirty();
+      requestAnimationFrame(() => updateA4Status());
+    } : null,
+  });
+}
+
+function showLinkDialog({ name, url, canRemove, onSubmit, onRemove }) {
+  const root = document.getElementById("dialog-root");
+  if (!root) return;
+  root.innerHTML = "";
+  root.classList.add("active");
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "dialog-backdrop";
+  backdrop.addEventListener("click", closeDialog);
+  root.appendChild(backdrop);
+
+  const box = document.createElement("div");
+  box.className = "dialog-box";
+  const title = document.createElement("h3");
+  title.className = "dialog-title";
+  title.textContent = canRemove ? "编辑链接" : "添加链接";
+  box.appendChild(title);
+
+  const createField = (labelText, value, placeholder) => {
+    const label = document.createElement("label");
+    label.className = "dialog-field";
+    const caption = document.createElement("span");
+    caption.className = "dialog-field-label";
+    caption.textContent = labelText;
+    const input = document.createElement("input");
+    input.className = "dialog-input";
+    input.type = "text";
+    input.value = value || "";
+    input.placeholder = placeholder;
+    label.appendChild(caption);
+    label.appendChild(input);
+    box.appendChild(label);
+    return input;
+  };
+
+  const nameInput = createField("链接名称", name, "例如：AI作品集");
+  const urlInput = createField("目标网址", url, "https://example.com");
+  const error = document.createElement("p");
+  error.className = "dialog-field-error";
+  error.hidden = true;
+  box.appendChild(error);
+
+  const submit = () => {
+    const nextName = nameInput.value.trim();
+    const href = normalizeLinkTarget(urlInput.value);
+    if (!nextName) {
+      error.textContent = "请输入链接名称。";
+      error.hidden = false;
+      nameInput.focus();
+      return;
+    }
+    if (!href) {
+      error.textContent = "请输入有效的 http、https 或 mailto 链接。";
+      error.hidden = false;
+      urlInput.focus();
+      return;
+    }
+    closeDialog();
+    onSubmit(nextName, href);
+  };
+
+  [nameInput, urlInput].forEach((input) => input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submit();
+  }));
+
+  const actions = document.createElement("div");
+  actions.className = "dialog-actions";
+  if (canRemove && onRemove) {
+    const removeButton = document.createElement("button");
+    removeButton.className = "dialog-btn dialog-btn-danger dialog-btn-leading";
+    removeButton.textContent = "移除链接";
+    removeButton.addEventListener("click", () => {
+      closeDialog();
+      onRemove();
+    });
+    actions.appendChild(removeButton);
+  }
+  const cancelButton = document.createElement("button");
+  cancelButton.className = "dialog-btn";
+  cancelButton.textContent = "取消";
+  cancelButton.addEventListener("click", closeDialog);
+  actions.appendChild(cancelButton);
+  const confirmButton = document.createElement("button");
+  confirmButton.className = "dialog-btn dialog-btn-primary";
+  confirmButton.textContent = canRemove ? "保存" : "添加";
+  confirmButton.addEventListener("click", submit);
+  actions.appendChild(confirmButton);
+  box.appendChild(actions);
+  root.appendChild(box);
+  setTimeout(() => (nameInput.value ? urlInput : nameInput).focus(), 50);
 }
 
 function clampFontDelta(value) {
@@ -485,6 +690,17 @@ function updateItalicButtonState(button) {
   }
   const parts = splitTokensForRange(bullet.content, offsets.start, offsets.end).filter((part) => part.selected);
   button.classList.toggle("toolbar-btn-active", parts.length > 0 && parts.every((part) => part.token.italic));
+}
+
+function updateLinkButtonState(button) {
+  if (!button || !_formatTarget || !_formatTarget.dataset.bulletId) {
+    if (button) button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  const bullet = findBulletById(_formatTarget.dataset.bulletId);
+  const offsets = _formatOffsets || getSelectionOffsets(_formatTarget, _formatRange);
+  const existing = bullet && offsets ? findLinkTokenRange(bullet.content, offsets.start) : null;
+  button.classList.toggle("toolbar-btn-active", Boolean(existing && offsets.end <= existing.end));
 }
 
 /** ========================
@@ -719,7 +935,7 @@ function syncElementToState(el) {
 
 function tokensFromEditableElement(element) {
   const tokens = [];
-  const walk = (node, strong = false, italic = false, inheritedDelta = 0) => {
+  const walk = (node, strong = false, italic = false, inheritedDelta = 0, inheritedHref = "") => {
     if (node.nodeType === Node.TEXT_NODE) {
       if (!node.nodeValue) return;
       tokens.push({
@@ -727,6 +943,7 @@ function tokensFromEditableElement(element) {
         value: node.nodeValue,
         ...(italic ? { italic: true } : {}),
         ...(inheritedDelta ? { fontSizeDelta: inheritedDelta } : {}),
+        ...(inheritedHref ? { href: inheritedHref } : {}),
       });
       return;
     }
@@ -734,7 +951,8 @@ function tokensFromEditableElement(element) {
     const nextStrong = strong || node.tagName === "STRONG" || node.tagName === "B";
     const nextItalic = italic || node.tagName === "EM" || node.tagName === "I";
     const nextDelta = Number(node.dataset.fontSizeDelta || inheritedDelta || 0);
-    node.childNodes.forEach((child) => walk(child, nextStrong, nextItalic, nextDelta));
+    const nextHref = node.tagName === "A" ? node.getAttribute("href") || inheritedHref : inheritedHref;
+    node.childNodes.forEach((child) => walk(child, nextStrong, nextItalic, nextDelta, nextHref));
   };
   element.childNodes.forEach((node) => walk(node));
   return mergeInlineTokens(tokens);

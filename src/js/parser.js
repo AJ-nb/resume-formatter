@@ -359,5 +359,32 @@ function parseBoldTokens(text, line, errors) {
     remaining = afterOpen.slice(closeIdx + marker.length);
   }
 
-  return tokens;
+  return parseMarkdownLinkTokens(tokens);
+}
+
+function parseMarkdownLinkTokens(tokens) {
+  const result = [];
+  const linkPattern = /\[([^\]]+)\]\(((?:https?:\/\/|mailto:)[^)\s]+)\)/gi;
+
+  for (const token of tokens) {
+    if (token.href) {
+      result.push(token);
+      continue;
+    }
+    let cursor = 0;
+    let match;
+    linkPattern.lastIndex = 0;
+    while ((match = linkPattern.exec(token.value || ""))) {
+      if (match.index > cursor) {
+        result.push({ ...token, value: token.value.slice(cursor, match.index) });
+      }
+      result.push({ ...token, value: match[1], href: match[2] });
+      cursor = match.index + match[0].length;
+    }
+    if (cursor < (token.value || "").length) {
+      result.push({ ...token, value: token.value.slice(cursor) });
+    }
+  }
+
+  return result;
 }

@@ -342,6 +342,15 @@ function renderInlineContent(tokens) {
       wrapper.style.fontSize = `calc(1em + ${token.fontSizeDelta}pt)`;
       node = wrapper;
     }
+    if (node && token.href) {
+      const link = document.createElement("a");
+      link.className = "inline-link";
+      link.href = token.href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.appendChild(node);
+      node = link;
+    }
     if (node) frag.appendChild(node);
   }
   return frag;

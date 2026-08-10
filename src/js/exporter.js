@@ -64,9 +64,11 @@ function serializeStateToMarkdown(state) {
 function serializeInlineMarkdown(tokens) {
   return (tokens || []).map((token) => {
     const value = String(token.value || "").replace(/[\r\n]+/g, " ");
-    if (token.type === "strong" && token.italic) return `***${value}***`;
-    if (token.type === "strong") return `**${value}**`;
-    return token.italic ? `*${value}*` : value;
+    let formatted = token.href ? `[${value}](${token.href})` : value;
+    if (token.type === "strong" && token.italic) formatted = `***${formatted}***`;
+    else if (token.type === "strong") formatted = `**${formatted}**`;
+    else if (token.italic) formatted = `*${formatted}*`;
+    return formatted;
   }).join("");
 }
 
