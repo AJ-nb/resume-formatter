@@ -476,8 +476,8 @@
 }
 #resume-page[data-theme="d"] .contact-item { white-space: nowrap; }
 #resume-page[data-theme="d"] .contact-item + .contact-item::before { content: " | "; color: #333; }
-#resume-page[data-theme="d"] .contact-item:last-child { color: #152fb4; text-decoration: underline; }
-#resume-page[data-theme="d"] .contact-item:last-child::before {
+#resume-page[data-theme="d"] .contact-link { color: #152fb4; text-decoration: underline; }
+#resume-page[data-theme="d"] .contact-link::before {
   display: inline-block;
   text-decoration: none;
 }
@@ -768,6 +768,13 @@
 #resume-page[data-theme] .resume-section[data-section-type="education"] .entry-role,
 #resume-page[data-theme] .resume-section[data-section-type="education"] .entry-date-location {
   white-space: nowrap;
+}
+
+#resume-page[data-theme="d"] .resume-section[data-section-type="education"] .entry-header,
+#resume-page[data-theme="d"] .resume-section[data-section-type="education"] .entry-name,
+#resume-page[data-theme="d"] .resume-section[data-section-type="education"] .entry-role,
+#resume-page[data-theme="d"] .resume-section[data-section-type="education"] .entry-date-location {
+  color: var(--color-text);
 }
 
 #resume-page[data-theme] .resume-section[data-section-type="education"] .entry-bullets .bullet-item {

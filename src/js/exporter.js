@@ -224,9 +224,38 @@ function downloadFile(content, fileName, mimeType) {
 }
 
 /**
+ * Ensure the portfolio contact is a real anchor before Chrome snapshots the
+ * page for printing. This also repairs stale DOM created by older app builds.
+ */
+function preparePortfolioLinkForPrint() {
+  if (typeof getState !== "function" || typeof getPortfolioContact !== "function") return;
+
+  const currentState = getState();
+  const portfolio = getPortfolioContact(currentState.profile && currentState.profile.portfolio);
+  if (!portfolio || !portfolio.href) return;
+
+  const current = document.querySelector('#contact-info [data-profile-field="portfolio"]');
+  if (!current) return;
+
+  let link = current;
+  if (current.tagName !== "A") {
+    link = document.createElement("a");
+    link.textContent = portfolio.label;
+    link.dataset.profileField = "portfolio";
+    current.replaceWith(link);
+  }
+
+  link.className = "contact-item contact-link";
+  link.setAttribute("href", portfolio.href);
+  link.setAttribute("target", "_blank");
+  link.setAttribute("rel", "noopener noreferrer");
+}
+
+/**
  * Export PDF via browser print.
  */
 function exportPdf() {
   if (typeof preparePhotoForPrint === "function") preparePhotoForPrint();
-  window.print();
+  preparePortfolioLinkForPrint();
+  requestAnimationFrame(() => window.print());
 }
