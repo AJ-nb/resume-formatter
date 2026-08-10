@@ -231,19 +231,22 @@ function applySelectionFormat(action, amount = 0) {
     bullet.content = mergeInlineTokens(selected.map((part) => part.token));
     target.replaceChildren(renderInlineContent(bullet.content));
   } else {
-    if (action === "bold" || action === "italic") {
-      showToast("加粗和斜体适用于正文要点；姓名、公司和岗位保持模板样式。", "info");
-      return;
-    }
     const key = getBlockFormatKey(target);
     if (!key) return;
     const state = getState();
     if (!state.layout) state.layout = {};
-    if (!state.layout.blockFontSizeDelta) state.layout.blockFontSizeDelta = {};
-    if (action === "reset") {
-      delete state.layout.blockFontSizeDelta[key];
+    if (action === "bold" || action === "italic") {
+      if (!state.layout.blockTextStyle) state.layout.blockTextStyle = {};
+      const style = state.layout.blockTextStyle[key] || {};
+      style[action] = action === "bold" ? !isElementBold(target) : !isElementItalic(target);
+      state.layout.blockTextStyle[key] = style;
     } else {
-      state.layout.blockFontSizeDelta[key] = clampFontDelta((state.layout.blockFontSizeDelta[key] || 0) + amount);
+      if (!state.layout.blockFontSizeDelta) state.layout.blockFontSizeDelta = {};
+      if (action === "reset") {
+        delete state.layout.blockFontSizeDelta[key];
+      } else {
+        state.layout.blockFontSizeDelta[key] = clampFontDelta((state.layout.blockFontSizeDelta[key] || 0) + amount);
+      }
     }
     applyLocalFormatting(state);
   }
@@ -525,19 +528,42 @@ function getBlockFormatKey(target) {
   return null;
 }
 
+function getBlockFormatSelector(key) {
+  const [kind, id, field] = key.split(":");
+  return kind === "profile"
+    ? `[data-profile-field="${CSS.escape(id)}"]`
+    : `[data-entry-id="${CSS.escape(id)}"] [data-entry-field="${CSS.escape(field)}"]`;
+}
+
+function isElementBold(element) {
+  const weight = getComputedStyle(element).fontWeight;
+  return weight === "bold" || Number.parseInt(weight, 10) >= 600;
+}
+
+function isElementItalic(element) {
+  return ["italic", "oblique"].includes(getComputedStyle(element).fontStyle);
+}
+
 function applyLocalFormatting(state) {
   document.querySelectorAll("#resume-content [data-profile-field], #resume-content [data-entry-field]").forEach((element) => {
     element.style.removeProperty("font-size");
+    element.style.removeProperty("font-weight");
+    element.style.removeProperty("font-style");
   });
-  const overrides = state.layout && state.layout.blockFontSizeDelta;
-  if (!overrides) return;
-  Object.entries(overrides).forEach(([key, delta]) => {
-    const [kind, id, field] = key.split(":");
-    const selector = kind === "profile"
-      ? `[data-profile-field="${CSS.escape(id)}"]`
-      : `[data-entry-id="${CSS.escape(id)}"] [data-entry-field="${CSS.escape(field)}"]`;
-    document.querySelectorAll(`#resume-content ${selector}`).forEach((element) => {
+
+  const fontSizeOverrides = state.layout && state.layout.blockFontSizeDelta;
+  Object.entries(fontSizeOverrides || {}).forEach(([key, delta]) => {
+    document.querySelectorAll(`#resume-content ${getBlockFormatSelector(key)}`).forEach((element) => {
       element.style.fontSize = `calc(1em + ${delta}pt)`;
+    });
+  });
+
+  const textStyleOverrides = state.layout && state.layout.blockTextStyle;
+  Object.entries(textStyleOverrides || {}).forEach(([key, style]) => {
+    if (!style || typeof style !== "object") return;
+    document.querySelectorAll(`#resume-content ${getBlockFormatSelector(key)}`).forEach((element) => {
+      if (typeof style.bold === "boolean") element.style.fontWeight = style.bold ? "bold" : "normal";
+      if (typeof style.italic === "boolean") element.style.fontStyle = style.italic ? "italic" : "normal";
     });
   });
 }
@@ -663,8 +689,12 @@ function initHeaderPositionDrag() {
 }
 
 function updateBoldButtonState(button) {
-  if (!button || !_formatTarget || !_formatTarget.dataset.bulletId) {
+  if (!button || !_formatTarget) {
     if (button) button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  if (!_formatTarget.dataset.bulletId) {
+    button.classList.toggle("toolbar-btn-active", isElementBold(_formatTarget));
     return;
   }
   const bullet = findBulletById(_formatTarget.dataset.bulletId);
@@ -678,8 +708,12 @@ function updateBoldButtonState(button) {
 }
 
 function updateItalicButtonState(button) {
-  if (!button || !_formatTarget || !_formatTarget.dataset.bulletId) {
+  if (!button || !_formatTarget) {
     if (button) button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  if (!_formatTarget.dataset.bulletId) {
+    button.classList.toggle("toolbar-btn-active", isElementItalic(_formatTarget));
     return;
   }
   const bullet = findBulletById(_formatTarget.dataset.bulletId);
