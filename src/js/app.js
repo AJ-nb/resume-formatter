@@ -256,7 +256,7 @@ date: 2024.01–2024.03
   showToast("已下载模板，用文本编辑器填写后导入即可。", "success");
 }
 
-/** Save the current text state as a new local Markdown snapshot. */
+/** Choose whether to create a copy or overwrite the active source file. */
 function handleSave() {
   syncFocusedEditor();
   const state = getState();
@@ -264,13 +264,31 @@ function handleSave() {
     showToast("请先导入简历。", "warning");
     return;
   }
-  try {
-    saveMarkdownSnapshot(state);
-    clearDirty();
-  } catch (e) {
-    console.error("Save failed:", e);
-    showToast("保存失败，请重试。", "error");
-  }
+  const sourceFile = getActiveSourceFile();
+  const canOverwrite = Boolean(
+    sourceFile && sourceFile.parentDirectory && sourceFile.handle
+    && typeof sourceFile.handle.createWritable === "function"
+  );
+  const currentName = sourceFile?.name || state.source?.fileName || "当前未关联源文件";
+  const overwriteMessage = canOverwrite
+    ? `当前文件：${currentName}\n请选择新建副本，或将修改写回当前源文件。`
+    : `当前文件：${currentName}\n当前版本没有可写的源文件，只能新建副本。`;
+
+  showDialog({
+    title: "保存简历",
+    message: overwriteMessage,
+    buttons: [
+      { text: "取消" },
+      { text: "新建副本", action: () => promptSaveCopy(state) },
+      {
+        text: "覆盖源文件",
+        primary: canOverwrite,
+        disabled: !canOverwrite,
+        title: canOverwrite ? `覆盖 ${currentName}` : "当前版本没有可写的源文件",
+        action: () => confirmOverwriteSource(sourceFile),
+      },
+    ],
+  });
 }
 
 /**
@@ -305,7 +323,7 @@ function handleExportPdf() {
  * @param {object} opts
  * @param {string} opts.title
  * @param {string} opts.message
- * @param {{ text: string, primary?: boolean, action?: Function }[]} opts.buttons
+ * @param {{ text: string, primary?: boolean, danger?: boolean, disabled?: boolean, title?: string, action?: Function }[]} opts.buttons
  */
 function showDialog({ title, message, buttons }) {
   const root = document.getElementById("dialog-root");
@@ -340,7 +358,9 @@ function showDialog({ title, message, buttons }) {
     const btnEl = document.createElement("button");
     btnEl.className = "dialog-btn";
     if (btn.primary) btnEl.classList.add("dialog-btn-primary");
-    if (btn.text.includes("删除") || btn.text.includes("恢复")) btnEl.classList.add("dialog-btn-danger");
+    if (btn.danger || btn.text.includes("删除") || btn.text.includes("恢复")) btnEl.classList.add("dialog-btn-danger");
+    btnEl.disabled = Boolean(btn.disabled);
+    if (btn.title) btnEl.title = btn.title;
     btnEl.textContent = btn.text;
     btnEl.addEventListener("click", () => {
       closeDialog();
@@ -451,6 +471,92 @@ function syncFocusedEditor() {
   if (active && active.closest && active.closest("#resume-content")) active.blur();
 }
 
+function getActiveSourceFile() {
+  if (!_activeFile || !_activeFile.startsWith("source:")) return null;
+  const sourceName = _activeFile.slice("source:".length);
+  return _directoryFiles.find((file) => file.name === sourceName) || null;
+}
+
+function promptSaveCopy(state) {
+  const sourceBaseName = (state.source?.fileName || "").split("/").pop()?.replace(/\.(?:md|markdown|json)$/i, "");
+  const defaultName = `${sourceBaseName || state.resumeName || "resume"}-副本`;
+  showInputDialog({
+    title: "新建副本",
+    message: "输入副本名称。副本将以 Markdown 格式保存在右侧版本列表中。",
+    defaultValue: defaultName,
+    confirmText: "创建副本",
+    onSubmit: (name) => {
+      try {
+        const snapshot = saveMarkdownSnapshot(state, name);
+        clearDirty();
+        showToast(`已新建副本“${snapshot.name}”。`, "success");
+      } catch (e) {
+        console.error("Failed to save resume copy:", e);
+        showToast("新建副本失败，请重试。", "error");
+      }
+    },
+  });
+}
+
+function confirmOverwriteSource(file) {
+  if (!file) return;
+  showDialog({
+    title: "确认覆盖源文件",
+    message: `确定覆盖“${file.name}”吗？\n\n源文件将替换为当前编辑器中的内容；不属于简历 Schema 的注释或额外字段不会保留。此操作无法在排版器中撤销。`,
+    buttons: [
+      { text: "取消" },
+      { text: "确认覆盖", danger: true, action: () => overwriteSourceFile(file) },
+    ],
+  });
+}
+
+async function overwriteSourceFile(file) {
+  if (!file?.handle || typeof file.handle.createWritable !== "function") {
+    showDirectoryWriteRequired();
+    return;
+  }
+  if (!await ensureDirectoryWritePermission()) {
+    showDirectoryWriteRequired();
+    return;
+  }
+
+  const state = getState();
+  const isJson = /\.json$/i.test(file.name);
+  const content = isJson ? serializeStateToJson(state) : serializeStateToMarkdown(state);
+  const saveButton = document.getElementById("btn-save");
+  if (saveButton) saveButton.disabled = true;
+
+  try {
+    const writable = await file.handle.createWritable();
+    try {
+      await writable.write(content);
+      await writable.close();
+    } catch (e) {
+      try {
+        await writable.abort();
+      } catch {}
+      throw e;
+    }
+    state.importSnapshot = createImportSnapshot(state);
+    clearDirty();
+    try {
+      await refreshResumeList();
+    } catch (refreshError) {
+      console.warn("Failed to refresh after saving source file:", refreshError);
+    }
+    showToast(`已覆盖源文件“${file.name}”。`, "success");
+  } catch (e) {
+    console.error("Failed to overwrite source file:", e);
+    showDialog({
+      title: "覆盖失败",
+      message: `无法写入“${file.name}”：${e.message || "未知错误"}`,
+      buttons: [{ text: "好的", primary: true }],
+    });
+  } finally {
+    if (saveButton) saveButton.disabled = false;
+  }
+}
+
 function loadMarkdownSnapshots() {
   try {
     const parsed = JSON.parse(localStorage.getItem(MD_SNAPSHOTS_KEY) || "[]");
@@ -474,7 +580,7 @@ function saveMarkdownSnapshot(state, customName) {
   ].join("");
   const baseName = sanitizeFileName(
     customName || state.resumeName || (state.source.fileName || "").replace(/\.(?:md|markdown|json)$/i, "") || "resume"
-  ).replace(/\.md$/i, "");
+  ).replace(/\.(?:md|markdown|json)$/i, "");
   const snapshot = {
     id: generateId(),
     name: `${baseName}${customName ? "" : `-${timestamp}`}.md`,
@@ -502,8 +608,8 @@ function renameMarkdownSnapshot(snapshotId) {
   if (!snapshot) return;
 
   showInputDialog({
-    title: "重命名快照",
-    message: "输入新的快照名称：",
+    title: "重命名副本",
+    message: "输入新的副本名称：",
     defaultValue: snapshot.name.replace(/\.md$/i, ""),
     confirmText: "重命名",
     onSubmit: (name) => {
@@ -832,7 +938,7 @@ async function ensureDirectoryWritePermission() {
 function showDirectoryWriteRequired() {
   showDialog({
     title: "需要文件夹写入权限",
-    message: "请使用“导入文件夹”重新选择该目录并允许读写，才能重命名或删除其中的文件。",
+    message: "请使用“导入文件夹”重新选择该目录并允许读写，才能覆盖、重命名或删除其中的文件。",
     buttons: [{ text: "好的", primary: true }],
   });
 }
@@ -1018,7 +1124,7 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       list.appendChild(heading);
     };
 
-    if (snapshots.length > 0) appendHeading("本地快照");
+    if (snapshots.length > 0) appendHeading("保存的副本");
     for (const snapshot of snapshots) {
       const versionKey = `snapshot:${snapshot.id}`;
       const li = document.createElement("li");
@@ -1033,8 +1139,8 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const renameButton = document.createElement("button");
       renameButton.className = "resume-list-action resume-list-rename";
       renameButton.textContent = "✎";
-      renameButton.title = "重命名快照";
-      renameButton.setAttribute("aria-label", "重命名快照");
+      renameButton.title = "重命名副本";
+      renameButton.setAttribute("aria-label", "重命名副本");
       renameButton.addEventListener("click", (event) => {
         event.stopPropagation();
         renameMarkdownSnapshot(snapshot.id);
@@ -1044,11 +1150,11 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const deleteButton = document.createElement("button");
       deleteButton.className = "resume-list-action resume-list-delete";
       deleteButton.textContent = "×";
-      deleteButton.title = "删除本地快照";
+      deleteButton.title = "删除保存的副本";
       deleteButton.addEventListener("click", (event) => {
         event.stopPropagation();
         showDialog({
-          title: "删除 MD 快照",
+          title: "删除保存的副本",
           message: `确定删除“${snapshot.name}”吗？`,
           buttons: [
             { text: "取消" },

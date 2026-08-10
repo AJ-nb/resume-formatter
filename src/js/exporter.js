@@ -72,6 +72,35 @@ function serializeInlineMarkdown(tokens) {
   }).join("");
 }
 
+/** Serialize Resume State to the supported JSON import schema. */
+function serializeStateToJson(state) {
+  const data = {
+    schemaVersion: 1,
+    resumeName: state.resumeName || "",
+    profile: {
+      name: state.profile.name || "",
+      headline: state.profile.headline || "",
+      location: state.profile.location || "",
+      phone: state.profile.phone || "",
+      email: state.profile.email || "",
+      website: state.profile.website || "",
+      portfolio: state.profile.portfolio || "",
+      github: state.profile.github || "",
+    },
+    sections: (state.sections || []).map((section) => ({
+      type: section.type,
+      entries: (section.entries || []).map((entry) => ({
+        name: entry.name || "",
+        role: entry.role || "",
+        date: entry.date || "",
+        location: entry.location || "",
+        bullets: (entry.bullets || []).map((bullet) => serializeInlineMarkdown(bullet.content)),
+      })),
+    })),
+  };
+  return JSON.stringify(data, null, 2) + "\n";
+}
+
 /**
  * Export current resume as a standalone HTML file.
  * @param {object} state
