@@ -19,6 +19,7 @@ const OPTIONAL_FRONTMATTER_FIELDS = [
   "website",
   "portfolio",
   "github",
+  "photo",
 ];
 
 /**
@@ -218,6 +219,7 @@ function buildState(frontmatter, sections, fileName) {
   state.profile.website = frontmatter.website || "";
   state.profile.portfolio = frontmatter.portfolio || "";
   state.profile.github = frontmatter.github || "";
+  state.photo.source = frontmatter.photo || "";
 
   state.sections = sections.map((section) => ({
     id: generateId(),

@@ -628,6 +628,10 @@ body {
   font-weight: 600;
 }
 
+.resume-list-item.pinned:not(.active) {
+  border-left-color: rgba(74, 63, 56, 0.28);
+}
+
 .resume-list-heading {
   padding: 9px 12px 4px;
   color: var(--text-tertiary);
@@ -666,8 +670,19 @@ body {
 }
 
 .resume-list-item:hover .resume-list-action,
-.resume-list-action:focus-visible {
+.resume-list-action:focus-visible,
+.resume-list-pin.active {
   opacity: 1;
+}
+
+.resume-list-pin {
+  font-size: 14px;
+}
+
+.resume-list-pin:hover,
+.resume-list-pin.active {
+  background: rgba(180, 132, 45, 0.12);
+  color: #9a6b18;
 }
 
 .resume-list-rename:hover {
@@ -1587,8 +1602,11 @@ body {
 #resume-page[data-theme] .entry-left { display: contents; }
 
 #resume-page[data-theme] .entry-name,
-#resume-page[data-theme] .entry-role {
+#resume-page[data-theme] .entry-role,
+#resume-page[data-theme] .entry-date-location {
   font-size: var(--font-size-entry-name);
+  font-weight: 700;
+  font-synthesis: weight;
 }
 
 #resume-page[data-theme] .entry-date-location { font-size: var(--font-size-small); }
@@ -2281,6 +2299,7 @@ function createDefaultState() {
       headerOffsetY: 0,
     },
     photo: {
+      source: "",
       dataUrl: "",
       mimeType: "",
       originalWidth: 0,
@@ -3751,6 +3770,7 @@ const OPTIONAL_FRONTMATTER_FIELDS = [
   "website",
   "portfolio",
   "github",
+  "photo",
 ];
 
 /**
@@ -3950,6 +3970,7 @@ function buildState(frontmatter, sections, fileName) {
   state.profile.website = frontmatter.website || "";
   state.profile.portfolio = frontmatter.portfolio || "";
   state.profile.github = frontmatter.github || "";
+  state.photo.source = frontmatter.photo || "";
 
   state.sections = sections.map((section) => ({
     id: generateId(),
@@ -5701,6 +5722,7 @@ function serializeStateToMarkdown(state) {
     ["website", state.profile.website],
     ["portfolio", state.profile.portfolio],
     ["github", state.profile.github],
+    ["photo", state.photo && state.photo.source],
   ];
 
   frontmatter.forEach(([key, value]) => {
@@ -6266,35 +6288,49 @@ function initPhoto() {
  * @param {File} file
  */
 function handlePhotoFile(file) {
-  const supported = ["image/jpeg", "image/png", "image/webp"];
-  if (!supported.includes(file.type)) {
-    showToast("不支持的图片格式，请上传 JPEG、PNG 或 WebP。", "error");
-    return;
-  }
-  if (file.size > PHOTO_MAX_FILE_MB * 1024 * 1024) {
-    showToast(`图片超过 ${PHOTO_MAX_FILE_MB}MB，请压缩后再上传。`, "error");
-    return;
-  }
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const dataUrl = e.target.result;
-    compressPhoto(dataUrl, file.type, (compressed, mimeType, w, h) => {
+  buildPhotoStateFromFile(file, getState().photo)
+    .then((photo) => {
       const state = getState();
-      const frameScale = state.photo && state.photo.frameScale ? state.photo.frameScale : 1;
-      const frameOffsetX = Number(state.photo && state.photo.frameOffsetX) || 0;
-      const frameOffsetY = Number(state.photo && state.photo.frameOffsetY) || 0;
-      state.photo = {
-        dataUrl: compressed, mimeType, originalWidth: w, originalHeight: h,
-        scale: 1, frameScale, frameOffsetX, frameOffsetY, offsetX: 0, offsetY: 0,
-      };
+      state.photo = photo;
       renderPhoto(state);
       updatePhotoControls();
       markDirty();
-    });
-  };
-  reader.onerror = () => showToast("图片读取失败。", "error");
-  reader.readAsDataURL(file);
+    })
+    .catch((error) => showToast(error.message || "图片读取失败。", "error"));
+}
+
+/** Convert an image File into the persisted photo state. */
+function buildPhotoStateFromFile(file, previousPhoto = {}) {
+  const supported = ["image/jpeg", "image/png", "image/webp"];
+  if (!supported.includes(file.type)) {
+    return Promise.reject(new Error("不支持的图片格式，请上传 JPEG、PNG 或 WebP。"));
+  }
+  if (file.size > PHOTO_MAX_FILE_MB * 1024 * 1024) {
+    return Promise.reject(new Error(`图片超过 ${PHOTO_MAX_FILE_MB}MB，请压缩后再上传。`));
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      compressPhoto(e.target.result, file.type, (compressed, mimeType, w, h) => {
+        resolve({
+          source: "",
+          dataUrl: compressed,
+          mimeType,
+          originalWidth: w,
+          originalHeight: h,
+          scale: 1,
+          frameScale: previousPhoto.frameScale || 1,
+          frameOffsetX: Number(previousPhoto.frameOffsetX) || 0,
+          frameOffsetY: Number(previousPhoto.frameOffsetY) || 0,
+          offsetX: 0,
+          offsetY: 0,
+        });
+      });
+    };
+    reader.onerror = () => reject(new Error("图片读取失败。"));
+    reader.readAsDataURL(file);
+  });
 }
 
 /**
@@ -6411,6 +6447,7 @@ function clearPhoto() {
   const frameOffsetX = Number(state.photo && state.photo.frameOffsetX) || 0;
   const frameOffsetY = Number(state.photo && state.photo.frameOffsetY) || 0;
   state.photo = {
+    source: "",
     dataUrl: "", mimeType: "", originalWidth: 0, originalHeight: 0,
     scale: 1, frameScale, frameOffsetX, frameOffsetY, offsetX: 0, offsetY: 0,
   };
@@ -6657,13 +6694,14 @@ function wireToolbar() {
 function handleImport(file, fileInput) {
   const reader = new FileReader();
 
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     const raw = e.target.result;
     const parseResult = parseMarkdown(raw);
     const validation = validateAndBuildState(parseResult, file.name);
 
     if (validation.state) {
       // Import successful
+      await hydrateReferencedPhoto(validation.state, { file });
       setState(validation.state);
       renderResume(validation.state);
       updateA4Status();
@@ -7001,6 +7039,43 @@ let _directoryImportSequence = 0;
 let _directoryStatusTimer = null;
 
 const MD_SNAPSHOTS_KEY = "resume-formatter:md-snapshots-v1";
+const PINNED_RESUMES_KEY = "resume-formatter:pinned-resumes-v1";
+
+function loadPinnedResumes() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PINNED_RESUMES_KEY) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch (e) {
+    console.error("Failed to load pinned resumes:", e);
+    return new Set();
+  }
+}
+
+function getResumePinKey(type, id) {
+  return `${type}:${id}`;
+}
+
+function toggleResumePin(pinKey) {
+  const pinned = loadPinnedResumes();
+  if (pinned.has(pinKey)) pinned.delete(pinKey);
+  else pinned.add(pinKey);
+  localStorage.setItem(PINNED_RESUMES_KEY, JSON.stringify([...pinned]));
+  renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
+}
+
+function appendPinButton(listItem, pinKey, displayName, isPinned) {
+  const button = document.createElement("button");
+  button.className = `resume-list-action resume-list-pin${isPinned ? " active" : ""}`;
+  button.textContent = isPinned ? "★" : "☆";
+  button.title = isPinned ? "取消置顶" : "置顶";
+  button.setAttribute("aria-label", `${isPinned ? "取消置顶" : "置顶"} ${displayName}`);
+  button.setAttribute("aria-pressed", String(isPinned));
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleResumePin(pinKey);
+  });
+  listItem.appendChild(button);
+}
 
 function syncFocusedEditor() {
   const active = document.activeElement;
@@ -7226,9 +7301,14 @@ function initResumeListPanel() {
       const supportedFiles = selectedFiles.filter((file) => /\.(?:md|markdown|json)$/i.test(file.name));
       const firstPath = supportedFiles[0]?.webkitRelativePath || selectedFiles[0]?.webkitRelativePath || "";
       const rootName = firstPath.includes("/") ? firstPath.split("/")[0] : "导入文件夹";
+      const relatedFiles = new Map(selectedFiles.map((file) => [
+        stripDirectoryRoot(file.webkitRelativePath || file.name, rootName),
+        file,
+      ]));
       const candidates = supportedFiles.map((file) => ({
         name: stripDirectoryRoot(file.webkitRelativePath || file.name, rootName),
         handle: { getFile: async () => file },
+        relatedFiles,
       }));
       const files = await filterRecognizableResumeFiles(candidates, sequence);
       if (sequence !== _directoryImportSequence) return;
@@ -7648,8 +7728,19 @@ function renderResumeFileList(files, directoryName, canRefresh) {
   }
   if (btnRefresh) btnRefresh.hidden = !canRefresh;
 
-  const sourceFiles = [...files].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
-  const snapshots = loadMarkdownSnapshots();
+  const pinned = loadPinnedResumes();
+  const sortPinnedFirst = (getKey, fallback) => (a, b) => {
+    const pinDifference = Number(pinned.has(getKey(b))) - Number(pinned.has(getKey(a)));
+    return pinDifference || fallback(a, b);
+  };
+  const sourceFiles = [...files].sort(sortPinnedFirst(
+    (file) => getResumePinKey("source", file.name),
+    (a, b) => a.name.localeCompare(b.name, "zh-CN")
+  ));
+  const snapshots = loadMarkdownSnapshots().sort(sortPinnedFirst(
+    (snapshot) => getResumePinKey("snapshot", snapshot.id),
+    (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+  ));
 
   if (list) {
     list.innerHTML = "";
@@ -7671,6 +7762,11 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const label = document.createElement("span");
       label.textContent = snapshot.name.replace(/\.md$/i, "");
       li.appendChild(label);
+
+      const pinKey = getResumePinKey("snapshot", snapshot.id);
+      const isPinned = pinned.has(pinKey);
+      li.classList.toggle("pinned", isPinned);
+      appendPinButton(li, pinKey, snapshot.name, isPinned);
 
       const renameButton = document.createElement("button");
       renameButton.className = "resume-list-action resume-list-rename";
@@ -7720,6 +7816,11 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const label = document.createElement("span");
       label.textContent = displayName.replace(/\.(?:md|markdown|json)$/i, "");
       li.appendChild(label);
+
+      const pinKey = getResumePinKey("source", name);
+      const isPinned = pinned.has(pinKey);
+      li.classList.toggle("pinned", isPinned);
+      appendPinButton(li, pinKey, displayName, isPinned);
 
       const renameButton = document.createElement("button");
       renameButton.className = "resume-list-action resume-list-rename";
@@ -7804,6 +7905,8 @@ async function loadResumeFromHandle(name, handle, versionKey = name) {
       : validateAndBuildState(parseMarkdown(text), name);
 
     if (validation.state) {
+      const sourceFile = _directoryFiles.find((item) => item.name === name);
+      await hydrateReferencedPhoto(validation.state, sourceFile || { handle });
       setState(validation.state);
       renderResume(validation.state);
       updateA4Status();
@@ -7844,6 +7947,30 @@ async function loadResumeFromHandle(name, handle, versionKey = name) {
           : `无法打开“${name}”：${e.message || "未知错误"}`,
       buttons: [{ text: "好的", primary: true }],
     });
+  }
+}
+
+/** Load a photo declared in Markdown from the same private directory. */
+async function hydrateReferencedPhoto(state, sourceFile) {
+  const reference = String(state.photo && state.photo.source || "").trim();
+  if (!reference) return;
+
+  try {
+    let photoFile = null;
+    if (sourceFile && sourceFile.parentDirectory && !reference.includes("/")) {
+      const photoHandle = await sourceFile.parentDirectory.getFileHandle(reference);
+      photoFile = await photoHandle.getFile();
+    } else if (sourceFile && sourceFile.relatedFiles) {
+      const sourcePath = sourceFile.name || "";
+      const basePath = sourcePath.includes("/") ? sourcePath.slice(0, sourcePath.lastIndexOf("/") + 1) : "";
+      photoFile = sourceFile.relatedFiles.get(basePath + reference) || null;
+    }
+    if (!photoFile) throw new Error("请通过“导入文件夹”打开母版，以授权读取同目录照片。");
+    const photo = await buildPhotoStateFromFile(photoFile, state.photo);
+    photo.source = reference;
+    state.photo = photo;
+  } catch (error) {
+    showToast(`未能自动载入照片“${reference}”：${error.message || "文件不可读"}`, "warning");
   }
 }
 

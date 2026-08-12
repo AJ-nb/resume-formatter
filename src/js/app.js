@@ -121,13 +121,14 @@ function wireToolbar() {
 function handleImport(file, fileInput) {
   const reader = new FileReader();
 
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     const raw = e.target.result;
     const parseResult = parseMarkdown(raw);
     const validation = validateAndBuildState(parseResult, file.name);
 
     if (validation.state) {
       // Import successful
+      await hydrateReferencedPhoto(validation.state, { file });
       setState(validation.state);
       renderResume(validation.state);
       updateA4Status();
@@ -465,6 +466,43 @@ let _directoryImportSequence = 0;
 let _directoryStatusTimer = null;
 
 const MD_SNAPSHOTS_KEY = "resume-formatter:md-snapshots-v1";
+const PINNED_RESUMES_KEY = "resume-formatter:pinned-resumes-v1";
+
+function loadPinnedResumes() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PINNED_RESUMES_KEY) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch (e) {
+    console.error("Failed to load pinned resumes:", e);
+    return new Set();
+  }
+}
+
+function getResumePinKey(type, id) {
+  return `${type}:${id}`;
+}
+
+function toggleResumePin(pinKey) {
+  const pinned = loadPinnedResumes();
+  if (pinned.has(pinKey)) pinned.delete(pinKey);
+  else pinned.add(pinKey);
+  localStorage.setItem(PINNED_RESUMES_KEY, JSON.stringify([...pinned]));
+  renderResumeFileList(_directoryFiles, _directoryName, _directoryCanRefresh);
+}
+
+function appendPinButton(listItem, pinKey, displayName, isPinned) {
+  const button = document.createElement("button");
+  button.className = `resume-list-action resume-list-pin${isPinned ? " active" : ""}`;
+  button.textContent = isPinned ? "★" : "☆";
+  button.title = isPinned ? "取消置顶" : "置顶";
+  button.setAttribute("aria-label", `${isPinned ? "取消置顶" : "置顶"} ${displayName}`);
+  button.setAttribute("aria-pressed", String(isPinned));
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleResumePin(pinKey);
+  });
+  listItem.appendChild(button);
+}
 
 function syncFocusedEditor() {
   const active = document.activeElement;
@@ -690,9 +728,14 @@ function initResumeListPanel() {
       const supportedFiles = selectedFiles.filter((file) => /\.(?:md|markdown|json)$/i.test(file.name));
       const firstPath = supportedFiles[0]?.webkitRelativePath || selectedFiles[0]?.webkitRelativePath || "";
       const rootName = firstPath.includes("/") ? firstPath.split("/")[0] : "导入文件夹";
+      const relatedFiles = new Map(selectedFiles.map((file) => [
+        stripDirectoryRoot(file.webkitRelativePath || file.name, rootName),
+        file,
+      ]));
       const candidates = supportedFiles.map((file) => ({
         name: stripDirectoryRoot(file.webkitRelativePath || file.name, rootName),
         handle: { getFile: async () => file },
+        relatedFiles,
       }));
       const files = await filterRecognizableResumeFiles(candidates, sequence);
       if (sequence !== _directoryImportSequence) return;
@@ -1112,8 +1155,19 @@ function renderResumeFileList(files, directoryName, canRefresh) {
   }
   if (btnRefresh) btnRefresh.hidden = !canRefresh;
 
-  const sourceFiles = [...files].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
-  const snapshots = loadMarkdownSnapshots();
+  const pinned = loadPinnedResumes();
+  const sortPinnedFirst = (getKey, fallback) => (a, b) => {
+    const pinDifference = Number(pinned.has(getKey(b))) - Number(pinned.has(getKey(a)));
+    return pinDifference || fallback(a, b);
+  };
+  const sourceFiles = [...files].sort(sortPinnedFirst(
+    (file) => getResumePinKey("source", file.name),
+    (a, b) => a.name.localeCompare(b.name, "zh-CN")
+  ));
+  const snapshots = loadMarkdownSnapshots().sort(sortPinnedFirst(
+    (snapshot) => getResumePinKey("snapshot", snapshot.id),
+    (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+  ));
 
   if (list) {
     list.innerHTML = "";
@@ -1135,6 +1189,11 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const label = document.createElement("span");
       label.textContent = snapshot.name.replace(/\.md$/i, "");
       li.appendChild(label);
+
+      const pinKey = getResumePinKey("snapshot", snapshot.id);
+      const isPinned = pinned.has(pinKey);
+      li.classList.toggle("pinned", isPinned);
+      appendPinButton(li, pinKey, snapshot.name, isPinned);
 
       const renameButton = document.createElement("button");
       renameButton.className = "resume-list-action resume-list-rename";
@@ -1184,6 +1243,11 @@ function renderResumeFileList(files, directoryName, canRefresh) {
       const label = document.createElement("span");
       label.textContent = displayName.replace(/\.(?:md|markdown|json)$/i, "");
       li.appendChild(label);
+
+      const pinKey = getResumePinKey("source", name);
+      const isPinned = pinned.has(pinKey);
+      li.classList.toggle("pinned", isPinned);
+      appendPinButton(li, pinKey, displayName, isPinned);
 
       const renameButton = document.createElement("button");
       renameButton.className = "resume-list-action resume-list-rename";
@@ -1268,6 +1332,8 @@ async function loadResumeFromHandle(name, handle, versionKey = name) {
       : validateAndBuildState(parseMarkdown(text), name);
 
     if (validation.state) {
+      const sourceFile = _directoryFiles.find((item) => item.name === name);
+      await hydrateReferencedPhoto(validation.state, sourceFile || { handle });
       setState(validation.state);
       renderResume(validation.state);
       updateA4Status();
@@ -1308,6 +1374,30 @@ async function loadResumeFromHandle(name, handle, versionKey = name) {
           : `无法打开“${name}”：${e.message || "未知错误"}`,
       buttons: [{ text: "好的", primary: true }],
     });
+  }
+}
+
+/** Load a photo declared in Markdown from the same private directory. */
+async function hydrateReferencedPhoto(state, sourceFile) {
+  const reference = String(state.photo && state.photo.source || "").trim();
+  if (!reference) return;
+
+  try {
+    let photoFile = null;
+    if (sourceFile && sourceFile.parentDirectory && !reference.includes("/")) {
+      const photoHandle = await sourceFile.parentDirectory.getFileHandle(reference);
+      photoFile = await photoHandle.getFile();
+    } else if (sourceFile && sourceFile.relatedFiles) {
+      const sourcePath = sourceFile.name || "";
+      const basePath = sourcePath.includes("/") ? sourcePath.slice(0, sourcePath.lastIndexOf("/") + 1) : "";
+      photoFile = sourceFile.relatedFiles.get(basePath + reference) || null;
+    }
+    if (!photoFile) throw new Error("请通过“导入文件夹”打开母版，以授权读取同目录照片。");
+    const photo = await buildPhotoStateFromFile(photoFile, state.photo);
+    photo.source = reference;
+    state.photo = photo;
+  } catch (error) {
+    showToast(`未能自动载入照片“${reference}”：${error.message || "文件不可读"}`, "warning");
   }
 }
 

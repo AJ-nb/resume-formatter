@@ -693,8 +693,11 @@
 #resume-page[data-theme] .entry-left { display: contents; }
 
 #resume-page[data-theme] .entry-name,
-#resume-page[data-theme] .entry-role {
+#resume-page[data-theme] .entry-role,
+#resume-page[data-theme] .entry-date-location {
   font-size: var(--font-size-entry-name);
+  font-weight: 700;
+  font-synthesis: weight;
 }
 
 #resume-page[data-theme] .entry-date-location { font-size: var(--font-size-small); }

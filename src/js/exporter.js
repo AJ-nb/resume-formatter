@@ -21,6 +21,7 @@ function serializeStateToMarkdown(state) {
     ["website", state.profile.website],
     ["portfolio", state.profile.portfolio],
     ["github", state.profile.github],
+    ["photo", state.photo && state.photo.source],
   ];
 
   frontmatter.forEach(([key, value]) => {

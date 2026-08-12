@@ -620,6 +620,10 @@ body {
   font-weight: 600;
 }
 
+.resume-list-item.pinned:not(.active) {
+  border-left-color: rgba(74, 63, 56, 0.28);
+}
+
 .resume-list-heading {
   padding: 9px 12px 4px;
   color: var(--text-tertiary);
@@ -658,8 +662,19 @@ body {
 }
 
 .resume-list-item:hover .resume-list-action,
-.resume-list-action:focus-visible {
+.resume-list-action:focus-visible,
+.resume-list-pin.active {
   opacity: 1;
+}
+
+.resume-list-pin {
+  font-size: 14px;
+}
+
+.resume-list-pin:hover,
+.resume-list-pin.active {
+  background: rgba(180, 132, 45, 0.12);
+  color: #9a6b18;
 }
 
 .resume-list-rename:hover {

@@ -97,35 +97,49 @@ function initPhoto() {
  * @param {File} file
  */
 function handlePhotoFile(file) {
-  const supported = ["image/jpeg", "image/png", "image/webp"];
-  if (!supported.includes(file.type)) {
-    showToast("不支持的图片格式，请上传 JPEG、PNG 或 WebP。", "error");
-    return;
-  }
-  if (file.size > PHOTO_MAX_FILE_MB * 1024 * 1024) {
-    showToast(`图片超过 ${PHOTO_MAX_FILE_MB}MB，请压缩后再上传。`, "error");
-    return;
-  }
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const dataUrl = e.target.result;
-    compressPhoto(dataUrl, file.type, (compressed, mimeType, w, h) => {
+  buildPhotoStateFromFile(file, getState().photo)
+    .then((photo) => {
       const state = getState();
-      const frameScale = state.photo && state.photo.frameScale ? state.photo.frameScale : 1;
-      const frameOffsetX = Number(state.photo && state.photo.frameOffsetX) || 0;
-      const frameOffsetY = Number(state.photo && state.photo.frameOffsetY) || 0;
-      state.photo = {
-        dataUrl: compressed, mimeType, originalWidth: w, originalHeight: h,
-        scale: 1, frameScale, frameOffsetX, frameOffsetY, offsetX: 0, offsetY: 0,
-      };
+      state.photo = photo;
       renderPhoto(state);
       updatePhotoControls();
       markDirty();
-    });
-  };
-  reader.onerror = () => showToast("图片读取失败。", "error");
-  reader.readAsDataURL(file);
+    })
+    .catch((error) => showToast(error.message || "图片读取失败。", "error"));
+}
+
+/** Convert an image File into the persisted photo state. */
+function buildPhotoStateFromFile(file, previousPhoto = {}) {
+  const supported = ["image/jpeg", "image/png", "image/webp"];
+  if (!supported.includes(file.type)) {
+    return Promise.reject(new Error("不支持的图片格式，请上传 JPEG、PNG 或 WebP。"));
+  }
+  if (file.size > PHOTO_MAX_FILE_MB * 1024 * 1024) {
+    return Promise.reject(new Error(`图片超过 ${PHOTO_MAX_FILE_MB}MB，请压缩后再上传。`));
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      compressPhoto(e.target.result, file.type, (compressed, mimeType, w, h) => {
+        resolve({
+          source: "",
+          dataUrl: compressed,
+          mimeType,
+          originalWidth: w,
+          originalHeight: h,
+          scale: 1,
+          frameScale: previousPhoto.frameScale || 1,
+          frameOffsetX: Number(previousPhoto.frameOffsetX) || 0,
+          frameOffsetY: Number(previousPhoto.frameOffsetY) || 0,
+          offsetX: 0,
+          offsetY: 0,
+        });
+      });
+    };
+    reader.onerror = () => reject(new Error("图片读取失败。"));
+    reader.readAsDataURL(file);
+  });
 }
 
 /**
@@ -242,6 +256,7 @@ function clearPhoto() {
   const frameOffsetX = Number(state.photo && state.photo.frameOffsetX) || 0;
   const frameOffsetY = Number(state.photo && state.photo.frameOffsetY) || 0;
   state.photo = {
+    source: "",
     dataUrl: "", mimeType: "", originalWidth: 0, originalHeight: 0,
     scale: 1, frameScale, frameOffsetX, frameOffsetY, offsetX: 0, offsetY: 0,
   };

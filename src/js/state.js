@@ -74,6 +74,7 @@ function createDefaultState() {
       headerOffsetY: 0,
     },
     photo: {
+      source: "",
       dataUrl: "",
       mimeType: "",
       originalWidth: 0,
