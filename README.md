@@ -1,190 +1,159 @@
-# Resume Formatter
+# 简历排版器
 
-一个本地运行的 Markdown 简历排版器。将符合固定格式的 Markdown 简历转换为可编辑 HTML，并导出单页 A4 PDF。
+一个浏览器本地运行的 Markdown / JSON 简历排版工具。它将结构化简历转换为可编辑的单页 A4 页面，并支持保存独立 HTML 和通过浏览器导出 PDF。
 
-**[在线使用 →](https://gracexygu.github.io/resume-formatter/)**
+**[在线使用](https://gracexygu.github.io/resume-formatter/)**
 
----
+## 适用场景
 
-## 核心理念
+你已经写好简历内容，希望减少 Word 中反复调整字号、间距、分页和证件照的时间，并稳定得到一份单页 A4 PDF。
 
+```text
+结构化简历.md / .json
+          ↓
+浏览器内预览与微调
+          ↓
+独立 HTML / A4 PDF
 ```
-已经写好的简历.md
-      ↓
-可继续编辑的简历.html
-      ↓
-用于投递的简历.pdf
-```
 
-- Markdown 是内容输入
-- HTML 是可编辑、可存档的排版版本
-- PDF 是最终投递文件
+## 当前能力
 
-所有操作在浏览器本地完成，**不上传任何数据**。
+- 导入 Markdown、JSON 或本地简历文件夹
+- 支持中英文栏目名与 Schema v1 校验
+- 提供四种排版风格与字号、行高、局部格式调整
+- 直接编辑正文，增删经历、项目和 Bullet
+- 本地上传、拖动和缩放证件照
+- 实时检测 A4 溢出高度，并提供排版修复入口
+- 保存可独立打开的 HTML
+- 通过桌面 Chrome 打印为 PDF
+- 使用转换提示词辅助将现有 PDF / Word 简历整理为结构化输入
 
-### 与 GraceOS 协作
+## 使用环境
 
-在 GraceOS 简历工作流中，本工具作为外接排版工具使用：
-
-- GraceOS 管理事实真源、JD 匹配、正文取舍和版本冻结；
-- Resume Formatter 读取已确认的 Markdown，负责 A4 测量、视觉调整与 HTML / PDF 导出；
-- 浏览器内的文字编辑只形成当前排版草稿，不自动回写 GraceOS 或源 Markdown；
-- 内容超出一页且视觉参数无法继续压缩时，工具返回溢出高度、换行位置和建议减少的行数，由内容侧决定删改。
-
-完整 Agent 边界见 [`AGENTS.md`](AGENTS.md)。
-
----
-
-## 功能
-
-- **导入 Markdown** — 支持中英文栏目名，自动校验并定位错误
-- **两套排版风格** — A/B 随时切换，同一份 MD 即时预览不同风格
-- **直接编辑** — 点击任意文字即可修改，无需回到 Markdown 文件
-- **Bullet / 条目增删** — 悬停出现 `+` 和 `×` 控件
-- **证件照** — 上传、拖动、缩放，随 HTML 一起保存
-- **A4 溢出检测** — 实时标记超出位置和大致高度
-- **另存为 HTML** — 导出的 HTML 包含完整编辑能力，可独立打开
-- **导出 PDF** — 通过浏览器打印（推荐 Chrome）
-- **简历目录面板** — 选择本地目录，只列出可通过简历 Schema 校验的 Markdown 和 JSON 文件，支持切换与置顶
-- **新增简历** — 下载空白 Schema v1 模板
-
----
+当前版本面向桌面端 Chrome。推荐使用最新稳定版 Chrome，并保持浏览器缩放为 100%。移动端布局尚未支持；Safari 和 Firefox 无法使用本地文件夹管理能力。
 
 ## 快速开始
 
-### 在线版（推荐）
+### 在线使用
 
-直接访问 [GitHub Pages](https://gracexygu.github.io/resume-formatter/)，无需任何安装。
+打开 [GitHub Pages](https://gracexygu.github.io/resume-formatter/)，在右侧“导入”菜单选择：
 
-### 本地版
+1. `导入 Markdown` / `导入 JSON`：选择单个文件；
+2. `粘贴 Markdown` / `粘贴 JSON`：直接粘贴结构化内容；
+3. `导入文件夹`：授权一个本地目录，并在侧栏切换多份简历。
 
-1. 下载 `dist/resume-formatter.html`
-2. 双击在 Chrome 中打开
-3. 点击「导入 MD」，选择你的简历文件
+完成微调后：
 
----
+1. 确认顶部显示 `A4 排版正常`；
+2. 点击“保存”下载独立 HTML；
+3. 点击“导出 PDF”，在 Chrome 中选择 A4、100% 缩放、关闭页眉页脚并开启背景图形。
 
-## Markdown 格式（Schema v1）
+### 本地使用
+
+下载 [`dist/resume-formatter.html`](dist/resume-formatter.html)，双击后使用桌面 Chrome 打开。该文件不依赖服务器和外部资源，可以离线运行。
+
+## Markdown Schema v1
 
 ```markdown
 ---
 schema_version: 1
 resume_name: 示例科技-产品经理
-name: 姓名
-headline: AI 产品经理
-location: 上海
-phone: 18012345678
-email: you@email.com
-photo: 证件照.png
+name: 示例用户
+headline: 产品经理
+location: 海州市
+phone: 1xx-xxxx-xxxx
+email: example@example.com
+photo: profile.png
 ---
 
 ## 教育经历
 
-### 示例大学
-role: 信息管理｜硕士
-date: 2024.09–2027.06
-location: 上海
+### 晨星大学
+role: 信息管理｜本科
+date: 2022.09-2026.06
+location: 海州市
 
-- 主修产品与数据分析
+- 主修产品设计与数据分析
 
 ## 实习经历
 
-### 示例科技｜产品部
+### 星河科技｜产品部
 role: 产品实习生
-date: 2026.04–2026.08
-location: 杭州
+date: 2025.04-2025.08
+location: 海州市
 
-- 负责**核心策略**迭代
+- 负责**核心流程**迭代与上线验收
 
 ## 项目经历
 
-### 项目名称
+### 实验管理工具
 role: 产品负责人
-date: 2026.05–2026.07
+date: 2025.02-2025.05
 
-- 项目描述
+- 完成需求分析、原型设计与可用性测试
 
 ## 技能
 
-- 产品：用户研究、策略设计
-- AI：Prompt、Context、Evals
+- 产品：用户研究、策略设计、PRD
+- 数据：SQL、Excel、看板搭建
 ```
 
-Bullet 支持 `**加粗**`、`*斜体*` 和 `[链接名称](https://example.com)`；也可选中文字后通过工具栏添加、编辑或移除链接。
+Bullet 支持 `**加粗**`、`*斜体*` 和 `[链接名称](https://example.com)`。`photo` 为可选字段；从文件夹导入时，照片需与 Markdown 位于同一目录。
 
-`photo` 为可选字段。照片文件需与 Markdown 位于同一目录，并通过“导入文件夹”授权读取；排版器会在打开该母版时自动载入照片。照片始终在浏览器本地处理。
-
-**栏目支持中英文：**
+支持的栏目名：
 
 | 中文 | 英文 |
-|------|------|
+| --- | --- |
 | 教育经历 | education |
 | 实习经历 / 工作经历 | experience |
 | 项目经历 | projects |
 | 技能 | skills |
 
----
+## 隐私说明
 
-## 目录面板使用
+- 简历内容、照片和文件句柄不会上传到服务器。
+- 页面不包含统计脚本、广告脚本或第三方运行时资源。
+- 自动草稿、置顶记录和已授权目录句柄可能保存在当前浏览器的 `localStorage` / `IndexedDB` 中。
+- 清除该网站的浏览器数据可以移除本地草稿和目录授权记录。
+- 保存的 HTML 与 PDF 由浏览器直接写入用户选择的本地位置。
 
-1. 点击右侧面板 📂 按钮，选择存放 Markdown 简历的本地目录
-2. 目录下仅列出能通过当前简历 Schema 解析与校验的 Markdown 和 JSON 文件，其他文件会被忽略
-3. 点击任意文件即可切换简历；悬停时可置顶、重命名或删除源文件，置顶状态会保存在当前浏览器中
-4. 下次打开工具会自动记住目录（需点一次「重新授权」）
+## 与其他系统集成
 
-> 此功能使用 [File System Access API](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access)，仅支持 Chrome。
-
----
-
-## 导出 PDF 推荐设置（Chrome）
-
-| 设置项 | 值 |
-|--------|-----|
-| 打印机 | 另存为 PDF |
-| 纸张 | A4 |
-| 缩放 | 100% |
-| 页眉和页脚 | 关闭 |
-| 背景图形 | 开启 |
-
----
+本工具可以独立使用，也可以作为求职工作流的排版环节。上游系统负责事实、内容与审核，本工具接收冻结的结构化简历，返回 HTML / PDF 产物与 A4 版面诊断。集成方应通过版本化 Schema 或适配层调用，避免复制源码和私人数据。
 
 ## 本地开发
 
-```bash
-# 构建（Node.js 18+，无需任何 npm 依赖）
-node scripts/build.mjs
+要求 Node.js 18 或更高版本，无 npm 依赖。
 
-# 输出
+```bash
+node scripts/build.mjs
+node --test tests/*.test.mjs
+node scripts/check-release.mjs
+```
+
+构建输出：
+
+```text
 dist/resume-formatter.html
 ```
 
-目录结构：
+源码结构：
 
-```
-src/
-  index.template.html
-  styles/   app.css · resume.css · print.css
-  js/       app.js · state.js · parser.js · validator.js
-            renderer.js · editor.js · exporter.js
-            overflow.js · photo.js · persistence.js · utils.js
-fixtures/
-  valid/    sample-resume.md · resume-ai-pm v0.md · resume-ai-pm v1.md
-  invalid/  missing-required-field.md
-scripts/
-  build.mjs
-dist/
-  resume-formatter.html
+```text
+src/        HTML 模板、样式与 JavaScript
+fixtures/   公开匿名测试数据
+tests/      Parser / Validator 自动化测试
+scripts/    构建与发布检查
+dist/       单文件发布产物
 ```
 
----
+## 已知边界
 
-## 隐私声明
+- 当前面向单页中文 A4 简历；超长内容需要用户删改或调整排版。
+- PDF 由 Chrome 打印功能生成，结果受纸张、缩放、页眉页脚和背景图形设置影响。
+- 移动端暂未支持。
+- 工具只处理排版，不提供 JD 分析、事实审核、AI 改写或自动投递。
 
-本工具不收集、不上传、不存储任何用户数据。所有简历内容、照片和导出文件仅在用户浏览器本地处理。
+## 开源许可证
 
----
-
-## License
-
-MIT
-# resume-formatter
+[MIT License](LICENSE)

@@ -83,7 +83,7 @@ function initEditor() {
   });
 
   content.addEventListener("click", (e) => {
-    const link = e.target.closest("a.inline-link");
+    const link = e.target.closest("a.inline-link, a.contact-link");
     if (link && !e.metaKey && !e.ctrlKey) e.preventDefault();
     const btn = e.target.closest("button");
     if (!btn) return;
@@ -131,7 +131,9 @@ function initSelectionFormatting() {
     _formatRange = range.cloneRange();
     _formatOffsets = getSelectionOffsets(target, range);
     Object.values(buttons).forEach((button) => { if (button) button.disabled = false; });
-    if (buttons.link) buttons.link.disabled = !target.dataset.bulletId;
+    if (buttons.link) {
+      buttons.link.disabled = !target.dataset.bulletId && target.dataset.profileField !== "portfolio";
+    }
     updateBoldButtonState(buttons.bold);
     updateItalicButtonState(buttons.italic);
     updateLinkButtonState(buttons.link);
@@ -372,7 +374,14 @@ function normalizeLinkTarget(value) {
 
 function openSelectionLinkDialog() {
   const target = _formatTarget;
-  if (!target || !target.dataset.bulletId) return;
+  if (!target) return;
+
+  if (target.dataset.profileField === "portfolio") {
+    openPortfolioLinkDialog(target);
+    return;
+  }
+
+  if (!target.dataset.bulletId) return;
   syncElementToState(target);
   const bullet = findBulletById(target.dataset.bulletId);
   const offsets = _formatOffsets || getSelectionOffsets(target, _formatRange);
@@ -407,6 +416,36 @@ function openSelectionLinkDialog() {
       pushUndoState();
       bullet.content = replaceInlineRange(bullet.content, start, end, { ...existingStyle, value: existing.token.value });
       target.replaceChildren(renderInlineContent(bullet.content));
+      markDirty();
+      requestAnimationFrame(() => updateA4Status());
+    } : null,
+  });
+}
+
+function openPortfolioLinkDialog(target) {
+  const state = getState();
+  const portfolio = getPortfolioContact(state.profile.portfolio) || {
+    label: target.textContent.trim(),
+    href: "",
+  };
+
+  showLinkDialog({
+    name: portfolio.label || target.textContent.trim(),
+    url: portfolio.href || "",
+    canRemove: Boolean(portfolio.href),
+    onSubmit: (name, href) => {
+      pushUndoState();
+      state.profile.portfolio = `${name} | ${href}`;
+      renderHeader(state);
+      applyLocalFormatting(state);
+      markDirty();
+      requestAnimationFrame(() => updateA4Status());
+    },
+    onRemove: portfolio.href ? () => {
+      pushUndoState();
+      state.profile.portfolio = portfolio.label;
+      renderHeader(state);
+      applyLocalFormatting(state);
       markDirty();
       requestAnimationFrame(() => updateA4Status());
     } : null,
@@ -727,8 +766,17 @@ function updateItalicButtonState(button) {
 }
 
 function updateLinkButtonState(button) {
-  if (!button || !_formatTarget || !_formatTarget.dataset.bulletId) {
+  if (!button || !_formatTarget) {
     if (button) button.classList.remove("toolbar-btn-active");
+    return;
+  }
+  if (_formatTarget.dataset.profileField === "portfolio") {
+    const portfolio = getPortfolioContact(getState().profile.portfolio);
+    button.classList.toggle("toolbar-btn-active", Boolean(portfolio && portfolio.href));
+    return;
+  }
+  if (!_formatTarget.dataset.bulletId) {
+    button.classList.remove("toolbar-btn-active");
     return;
   }
   const bullet = findBulletById(_formatTarget.dataset.bulletId);
@@ -925,6 +973,11 @@ function syncElementToState(el) {
       state.profile.phone = raw.replace(/^联系电话：/, "").trim();
     } else if (field === "email") {
       state.profile.email = raw.replace(/^电子邮箱：/, "").trim();
+    } else if (field === "portfolio") {
+      const current = getPortfolioContact(state.profile.portfolio);
+      state.profile.portfolio = raw && current && current.href
+        ? `${raw} | ${current.href}`
+        : raw;
     } else if (field in state.profile) {
       state.profile[field] = raw;
     }

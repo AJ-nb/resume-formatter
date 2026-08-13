@@ -84,7 +84,7 @@ function renderHeader(state) {
       item.className = `contact-item${href ? " contact-link" : ""}`;
       item.textContent = text;
       item.dataset.profileField = field;
-      if (field !== "portfolio") item.contentEditable = "plaintext-only";
+      item.contentEditable = "plaintext-only";
       if (href) {
         item.href = href;
         item.target = "_blank";

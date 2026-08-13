@@ -1,11 +1,10 @@
 # 技术设计｜本地 Markdown 简历排版器
 
 文档版本：v1.0
-文档状态：待开发
+文档状态：公开版本持续维护
 关联文档：PRD｜本地 Markdown 简历排版器 v1.0
-产品负责人：Grace
-更新时间：2026-08-01
-产品暂定名：Resume Formatter
+更新时间：2026-08-14
+产品名称：简历排版器
 
 ---
 
@@ -178,7 +177,7 @@ DOM
     headline: "AI 产品经理",
     location: "上海",
     phone: "180xxxxxxxx",
-    email: "example@email.com",
+    email: "example@example.com",
     website: "",
     portfolio: "",
     github: ""

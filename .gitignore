@@ -1,1 +1,24 @@
 .worktrees/
+.DS_Store
+
+# 本地私人输入与导出物。公开样例只允许放在 fixtures/ 下。
+*.md
+!README.md
+!AGENTS.md
+!PRD.md
+!TECH_DESIGN.md
+!fixtures/**/*.md
+*.json
+!fixtures/**/*.json
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.pdf
+*.doc
+*.docx
+
+# 本地工具输出
+coverage/
+test-results/
+playwright-report/

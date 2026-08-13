@@ -6,7 +6,7 @@
  * Usage: node scripts/build.mjs
  */
 
-import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -119,12 +119,18 @@ function build() {
     mkdirSync(DIST, { recursive: true });
   }
 
-  // Write output
-  const outputPath = join(DIST, "resume-formatter.html");
-  writeFileSync(outputPath, html, "utf-8");
+  // Keep the downloadable artifact and the two GitHub Pages entry files identical.
+  const outputPaths = [
+    join(DIST, "resume-formatter.html"),
+    join(ROOT, "index.html"),
+    join(ROOT, "resume-formatter.html"),
+  ];
+  for (const outputPath of outputPaths) {
+    writeFileSync(outputPath, html, "utf-8");
+  }
 
   const sizeKB = (Buffer.byteLength(html, "utf-8") / 1024).toFixed(1);
-  console.log(`\n  ✓ Built: ${outputPath}`);
+  console.log(`\n  ✓ Built: ${outputPaths.join(", ")}`);
   console.log(`    Size: ${sizeKB} KB\n`);
 }
 

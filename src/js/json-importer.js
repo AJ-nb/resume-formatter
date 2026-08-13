@@ -57,11 +57,11 @@ const JSON_EXAMPLE = `{
   "schemaVersion": 1,
   "resumeName": "示例简历",
   "profile": {
-    "name": "张三",
+    "name": "示例用户",
     "headline": "AI 产品经理",
-    "location": "北京",
-    "phone": "13800138000",
-    "email": "zhangsan@example.com",
+    "location": "海州市",
+    "phone": "1xx-xxxx-xxxx",
+    "email": "example@example.com",
     "website": "",
     "portfolio": "",
     "github": ""
@@ -71,10 +71,10 @@ const JSON_EXAMPLE = `{
       "type": "education",
       "entries": [
         {
-          "name": "清华大学",
+          "name": "晨星大学",
           "role": "计算机科学与技术｜本科",
           "date": "2020.09–2024.06",
-          "location": "北京",
+          "location": "海州市",
           "bullets": ["GPA 3.8/4.0", "获国家奖学金"]
         }
       ]
@@ -83,10 +83,10 @@ const JSON_EXAMPLE = `{
       "type": "experience",
       "entries": [
         {
-          "name": "字节跳动｜产品部",
+          "name": "星河科技｜产品部",
           "role": "AI 产品经理实习",
           "date": "2024.07–2024.09",
-          "location": "北京",
+          "location": "海州市",
           "bullets": ["负责 **豆包** 的对话体验优化，DAU 提升 15%", "设计 prompt 模板库，覆盖 200+ 场景"]
         }
       ]
@@ -107,7 +107,7 @@ const JSON_EXAMPLE = `{
       "entries": [
         {
           "name": "",
-          "bullets": ["编程语言：Python、JavaScript、SQL", "工具：Figma、Notion、飞书"]
+          "bullets": ["编程语言：Python、JavaScript、SQL", "工具：Figma、协作文档、思维导图"]
         }
       ]
     }
@@ -118,12 +118,12 @@ const SCHEMA_VERSION = 1;
 
 const MARKDOWN_EXAMPLE = `---
 schema_version: 1
-resume_name: 张三-AI产品经理
-name: 张三
+resume_name: 示例用户-AI产品经理
+name: 示例用户
 headline: AI 产品经理
-location: 北京
-phone: 13800138000
-email: zhangsan@example.com
+location: 海州市
+phone: 1xx-xxxx-xxxx
+email: example@example.com
 website:
 portfolio:
 github:
@@ -131,20 +131,20 @@ github:
 
 ## education
 
-### 清华大学
+### 晨星大学
 role: 计算机科学与技术｜本科
 date: 2020.09–2024.06
-location: 北京
+location: 海州市
 
 - GPA 3.8/4.0
 - 获国家奖学金
 
 ## experience
 
-### 字节跳动｜产品部
+### 星河科技｜产品部
 role: AI 产品经理实习
 date: 2024.07–2024.09
-location: 北京
+location: 海州市
 
 - 负责 **豆包** 的对话体验优化
 - 设计 prompt 模板库，覆盖 200+ 场景
