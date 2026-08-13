@@ -59,10 +59,11 @@ body {
 
 #app {
   display: grid;
-  grid-template-rows: 64px 1fr;
+  grid-template-rows: 64px auto 1fr;
   grid-template-columns: 1fr 230px;
   grid-template-areas:
     "toolbar toolbar"
+    "privacy privacy"
     "workspace panel";
   min-height: 100vh;
 }
@@ -418,6 +419,42 @@ body {
 
   .toolbar-info {
     display: none;
+  }
+}
+
+/* ========================
+   Privacy notice
+   ======================== */
+
+#privacy-notice {
+  grid-area: privacy;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 20px;
+  border-bottom: 1px solid rgba(49, 105, 81, 0.18);
+  background: #edf5f0;
+  color: #355446;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+#privacy-notice strong {
+  color: #234537;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  #privacy-notice {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+    padding-inline: 14px;
+    text-align: left;
   }
 }
 
