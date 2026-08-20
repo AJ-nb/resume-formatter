@@ -80,16 +80,17 @@ test("当前 JSON 与 JSON Resume 统一为 ResumeDocumentV2", () => {
 });
 
 test("PDF/DOCX 提取文本映射保留未映射片段且不执行 HTML", () => {
-  const result = parseExtractedResumeText(`示例用户
-产品设计师
+  const result = parseExtractedResumeText(`示 例 用 户
+产 品 设 计 师
 person@example.com
 这是一段无法确定归属的文字
-工作经历
-示例公司
+工 作 经 历
+示 例 公 司
 2022 - 至今
 • 将交付时间缩短 20%
 `, "resume.pdf");
   assert.equal(result.document.profile.name, "示例用户");
+  assert.equal(result.document.profile.headline, "产品设计师");
   assert.ok(result.document.sections.some((section) => section.type === "experience"));
   assert.ok(result.unmapped.some((item) => item.text.includes("无法确定")));
   assert.equal(sanitizePlainText("<img src=x onerror=alert(1)>\u0000"), "<img src=x onerror=alert(1)>");

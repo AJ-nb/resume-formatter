@@ -147,9 +147,16 @@ function looksLikeDate(line) {
   return /(?:19|20)\d{2}|至今|present|current/i.test(line);
 }
 
+function normalizeExtractedLine(line) {
+  return line
+    .replace(/\s+/g, " ")
+    .replace(/(\p{Script=Han}) (?=\p{Script=Han})/gu, "$1")
+    .trim();
+}
+
 export function parseExtractedResumeText(raw, fileName = "resume") {
   const text = sanitizePlainText(raw);
-  const lines = text.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const lines = text.split("\n").map(normalizeExtractedLine).filter(Boolean);
   if (!lines.length) throw new Error("没有提取到可读取的文字。扫描型 PDF 需要先进行 OCR，本工具不会猜测内容。");
 
   const profile = { name: "", headline: "", location: "", phone: "", email: "", website: "", github: "" };
