@@ -1,137 +1,79 @@
-/**
- * Build script for resume-formatter.
- * Merges CSS and JS into the HTML template, producing a standalone single-file HTML.
- * Uses Node.js native modules only — no npm dependencies required.
- *
- * Usage: node scripts/build.mjs
- */
-
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import * as esbuild from "esbuild";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..");
-const SRC = join(ROOT, "src");
-const DIST = join(ROOT, "dist");
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 
-// CSS files to include (in order)
-const CSS_FILES = [
-  "styles/app.css",
-  "styles/resume.css",
-  "styles/print.css",
-];
+const rawPlugin = {
+  name: "raw-module",
+  setup(build) {
+    build.onResolve({ filter: /\?raw$/ }, (args) => {
+      const specifier = args.path.replace(/\?raw$/, "");
+      const path = specifier.startsWith(".")
+        ? join(args.resolveDir, specifier)
+        : require.resolve(specifier, { paths: [args.resolveDir] });
+      return { path, namespace: "raw-module" };
+    });
+    build.onLoad({ filter: /.*/, namespace: "raw-module" }, async (args) => ({
+      contents: `export default ${JSON.stringify(await readFile(args.path, "utf8"))};`,
+      loader: "js",
+    }));
+  },
+};
 
-// JS files to include (in dependency order)
-const JS_FILES = [
-  "js/utils.js",
-  "js/state.js",
-  "js/parser.js",
-  "js/json-importer.js",
-  "js/validator.js",
-  "js/renderer.js",
-  "js/editor.js",
-  "js/persistence.js",
-  "js/exporter.js",
-  "js/overflow.js",
-  "js/photo.js",
-  "js/app.js",
-];
-
-/**
- * Read and concatenate CSS files.
- * @returns {string}
- */
-function buildStyles() {
-  let css = "";
-
-  for (const file of CSS_FILES) {
-    const path = join(SRC, file);
-    if (!existsSync(path)) {
-      console.warn(`  ⚠️  Missing: ${file}`);
-      continue;
-    }
-    const content = readFileSync(path, "utf-8");
-    css += `/* ${file} */\n${content}\n`;
-  }
-
-  return `<style>\n${css}\n</style>`;
+async function bundleJavaScript() {
+  const result = await esbuild.build({
+    entryPoints: [join(root, "src/v2/app.js")],
+    bundle: true,
+    write: false,
+    format: "iife",
+    platform: "browser",
+    target: ["chrome109", "edge109", "safari16.4"],
+    minify: true,
+    legalComments: "eof",
+    plugins: [rawPlugin],
+    define: { __BUILD_VERSION__: JSON.stringify(packageJson.version) },
+    logLevel: "info",
+  });
+  return result.outputFiles[0].text.replace(/<\/script/gi, "<\\/script");
 }
 
-/**
- * Read and concatenate JS files.
- * @returns {string}
- */
-function buildScripts() {
-  let js = "";
-
-  for (const file of JS_FILES) {
-    const path = join(SRC, file);
-    if (!existsSync(path)) {
-      console.warn(`  ⚠️  Missing: ${file}`);
-      continue;
-    }
-    const content = readFileSync(path, "utf-8");
-    js += `// ${file}\n${content}\n`;
-  }
-
-  return `<script>\n${js}\n</script>`;
+async function bundleCss() {
+  const result = await esbuild.build({
+    entryPoints: [join(root, "src/styles/v2.css")],
+    bundle: true,
+    write: false,
+    minify: true,
+    legalComments: "eof",
+    loader: { ".css": "css" },
+    logLevel: "info",
+  });
+  return result.outputFiles[0].text.replace(/<\/style/gi, "<\\/style");
 }
 
-/**
- * Main build function.
- */
-function build() {
-  console.log("Building resume-formatter...\n");
+async function build() {
+  console.log(`Building Resume Formatter v${packageJson.version}...`);
+  const [template, javascript, css] = await Promise.all([
+    readFile(join(root, "src/index.template.html"), "utf8"),
+    bundleJavaScript(),
+    bundleCss(),
+  ]);
+  const html = template
+    .replace("<!-- __STYLES__ -->", () => `<style>${css}</style>`)
+    .replace("<!-- __SCRIPTS__ -->", () => `<script>${javascript}</script>`);
 
-  // Read template
-  const templatePath = join(SRC, "index.template.html");
-  if (!existsSync(templatePath)) {
-    console.error("  ✗ Template not found:", templatePath);
-    process.exit(1);
-  }
-  let html = readFileSync(templatePath, "utf-8");
-
-  // Build CSS
-  console.log("  Building CSS...");
-  const styles = buildStyles();
-  html = html.replace("<!-- __STYLES__ -->", styles);
-
-  // Build JS
-  console.log("  Building JS...");
-  const scripts = buildScripts();
-
-  // Inject default resume MD as a constant
-  const defaultResumeFilename = "sample-resume.md";
-  const defaultMdPath = join(ROOT, "fixtures/valid", defaultResumeFilename);
-  let defaultMdScript = "";
-  if (existsSync(defaultMdPath)) {
-    const mdContent = readFileSync(defaultMdPath, "utf-8");
-    const escaped = JSON.stringify(mdContent);
-    defaultMdScript = `<script>const DEFAULT_RESUME_MD = ${escaped};\nconst DEFAULT_RESUME_FILENAME = ${JSON.stringify(defaultResumeFilename)};</script>`;
-    console.log("  Injecting default resume...");
-  }
-
-  html = html.replace("<!-- __SCRIPTS__ -->", defaultMdScript + "\n" + scripts);
-
-  // Ensure dist directory exists
-  if (!existsSync(DIST)) {
-    mkdirSync(DIST, { recursive: true });
-  }
-
-  // Keep the downloadable artifact and the two GitHub Pages entry files identical.
-  const outputPaths = [
-    join(DIST, "resume-formatter.html"),
-    join(ROOT, "index.html"),
-    join(ROOT, "resume-formatter.html"),
+  const outputs = [
+    join(root, "index.html"),
+    join(root, "resume-formatter.html"),
+    join(root, "dist/resume-formatter.html"),
   ];
-  for (const outputPath of outputPaths) {
-    writeFileSync(outputPath, html, "utf-8");
-  }
-
-  const sizeKB = (Buffer.byteLength(html, "utf-8") / 1024).toFixed(1);
-  console.log(`\n  ✓ Built: ${outputPaths.join(", ")}`);
-  console.log(`    Size: ${sizeKB} KB\n`);
+  await mkdir(join(root, "dist"), { recursive: true });
+  await Promise.all(outputs.map((path) => writeFile(path, html, "utf8")));
+  console.log(`Built ${outputs.length} identical offline files (${(Buffer.byteLength(html) / 1024 / 1024).toFixed(2)} MB).`);
 }
 
-build();
+await build();

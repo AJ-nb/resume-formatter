@@ -1,186 +1,107 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>简历排版器</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f5f5f3">
+  <meta name="description" content="本地优先的简历编辑与排版工具">
+  <title>Resume Formatter</title>
   <!-- __STYLES__ -->
 </head>
 <body>
-  <div id="app">
-    <aside id="toolbar">
-      <div class="toolbar-group toolbar-theme-group">
-        <span class="toolbar-label">风格</span>
-        <details class="toolbar-menu" id="theme-menu">
-          <summary class="toolbar-btn toolbar-select" title="选择简历风格">
-            <span id="current-theme-label">黑体</span>
-            <span class="toolbar-caret">⌄</span>
-          </summary>
-          <div class="toolbar-popover toolbar-theme-options">
-            <button id="btn-theme-a" class="toolbar-btn toolbar-btn-active" title="风格 A：黑体">黑体</button>
-            <button id="btn-theme-b" class="toolbar-btn" title="风格 B：宋体">宋体</button>
-            <button id="btn-theme-c" class="toolbar-btn" title="风格 C：思源宋体">思源</button>
-            <button id="btn-theme-d" class="toolbar-btn" title="风格 D：蓝黑学术简历">学术</button>
+  <div id="app-shell">
+    <header id="command-bar">
+      <div class="command-brand">
+        <div class="brand-mark" aria-hidden="true">R</div>
+        <div class="brand-copy"><strong>Resume Formatter</strong><span id="save-status">已保存在本机</span></div>
+      </div>
+      <div id="mobile-view-switch" class="segmented-control" role="tablist" aria-label="移动端视图">
+        <button type="button" class="active" data-mobile-view="content" role="tab" aria-selected="true">内容</button>
+        <button type="button" data-mobile-view="preview" role="tab" aria-selected="false">预览</button>
+      </div>
+      <div class="command-actions">
+        <button id="btn-import" class="command-button" type="button" title="导入简历" aria-label="导入简历"><i data-lucide="file-up"></i><span>导入</span></button>
+        <button id="btn-undo" class="icon-command" type="button" title="撤销" aria-label="撤销"><i data-lucide="undo-2"></i></button>
+        <button id="btn-redo" class="icon-command" type="button" title="重做" aria-label="重做"><i data-lucide="redo-2"></i></button>
+        <button id="btn-save" class="command-button primary" type="button" title="保存到本机"><i data-lucide="save"></i><span>保存</span></button>
+        <div class="command-menu">
+          <button id="btn-export-menu" class="icon-command" type="button" title="导出" aria-label="导出" aria-haspopup="menu"><i data-lucide="download"></i></button>
+          <div id="export-menu" class="popover-menu" role="menu" hidden>
+            <button id="btn-export-html" type="button" role="menuitem"><i data-lucide="file-code-2"></i>独立 HTML</button>
+            <button id="btn-export-markdown" type="button" role="menuitem"><i data-lucide="file-text"></i>Markdown</button>
+            <button id="btn-export-json" type="button" role="menuitem"><i data-lucide="braces"></i>JSON</button>
+            <button id="btn-print" type="button" role="menuitem"><i data-lucide="printer"></i>打印 PDF</button>
           </div>
-        </details>
-      </div>
-      <div class="toolbar-group toolbar-typesetting">
-        <div class="toolbar-global-controls">
-          <label class="toolbar-control">
-            <span>行高 <output id="line-height-value">1.57</output></span>
-            <input type="range" id="line-height-slider" class="toolbar-range" min="1.15" max="1.8" step="0.01" value="1.57" title="调整行高">
-          </label>
-          <label class="toolbar-control">
-            <span>字号 <output id="font-size-value">10pt</output></span>
-            <input type="range" id="font-size-slider" class="toolbar-range" min="7" max="12" step="0.1" value="10" title="调整正文字号">
-          </label>
-          <label class="toolbar-control">
-            <span>照片 <output id="photo-size-value">100%</output></span>
-            <input type="range" id="photo-size-slider" class="toolbar-range" min="40" max="200" step="5" value="100" title="等比例调整照片框大小">
-          </label>
         </div>
-        <div class="selection-format-controls" aria-label="选区格式">
-          <span class="toolbar-label">选区</span>
-          <button id="btn-selection-bold" class="toolbar-icon-btn" title="加粗或取消加粗" aria-label="加粗或取消加粗" disabled><strong>B</strong></button>
-          <button id="btn-selection-italic" class="toolbar-icon-btn toolbar-icon-italic" title="斜体或取消斜体" aria-label="斜体或取消斜体" disabled>I</button>
-          <button id="btn-selection-link" class="toolbar-icon-btn" title="添加或编辑链接" aria-label="添加或编辑链接" disabled>↗</button>
-          <button id="btn-selection-smaller" class="toolbar-icon-btn" title="选区字号缩小 0.5pt" disabled>A-</button>
-          <button id="btn-selection-larger" class="toolbar-icon-btn" title="选区字号增大 0.5pt" disabled>A+</button>
-          <button id="btn-selection-reset" class="toolbar-icon-btn" title="清除选区字号微调" aria-label="清除选区字号微调" disabled>↺</button>
-          <label class="selection-bullet-control" title="更换项目符号">
-            <select id="selection-bullet-style" class="toolbar-bullet-select" aria-label="项目符号" disabled>
-              <option value="default">模板符号</option>
-              <option value="none">无符号</option>
-              <option value="disc">● 实心圆</option>
-              <option value="circle">○ 空心圆</option>
-              <option value="square">▪ 方块</option>
-              <option value="arrow">➤ 箭头</option>
-            </select>
-          </label>
-        </div>
+        <button id="btn-ai-settings" class="icon-command" type="button" title="AI 设置" aria-label="AI 设置"><i data-lucide="sparkles"></i></button>
       </div>
-      <div class="toolbar-spacer"></div>
-      <div class="toolbar-info">
-        <div id="current-filename" class="info-item">未导入文件</div>
-        <div class="toolbar-status-line">
-          <span id="draft-status" class="info-item">—</span>
-          <span id="a4-status" class="info-item">—</span>
+    </header>
+    <div id="app-body">
+      <aside id="left-sidebar" aria-label="文档与模板">
+        <div class="sidebar-tabs" role="tablist">
+          <button type="button" class="active" data-sidebar-tab="document" role="tab" aria-selected="true">文档</button>
+          <button type="button" data-sidebar-tab="templates" role="tab" aria-selected="false">模板</button>
         </div>
-      </div>
-      <div class="toolbar-group toolbar-photo-group">
-        <span class="toolbar-label">照片</span>
-        <div class="toolbar-photo-actions">
-          <button id="btn-photo-upload" class="toolbar-btn toolbar-compact-btn" title="上传证件照">
-            <span class="btn-label">上传</span>
-          </button>
-          <button id="btn-photo-delete" class="toolbar-btn toolbar-compact-btn" hidden title="删除证件照">
-            <span class="btn-label">删除</span>
-          </button>
+        <section id="sidebar-document" class="sidebar-panel active">
+          <div class="sidebar-heading"><span>栏目</span><button id="btn-add-section" class="small-icon-button" type="button" title="添加栏目" aria-label="添加栏目"><i data-lucide="plus"></i></button></div>
+          <nav id="section-nav" aria-label="简历栏目"></nav>
+          <div class="sidebar-divider"></div>
+          <div class="sidebar-heading"><span>本地版本</span><button id="btn-save-version" class="small-icon-button" type="button" title="保存版本" aria-label="保存版本"><i data-lucide="bookmark-plus"></i></button></div>
+          <div id="version-list" class="version-list"></div>
+        </section>
+        <section id="sidebar-templates" class="sidebar-panel"><div id="template-list" class="template-list"></div></section>
+      </aside>
+      <main id="workspace">
+        <div id="canvas-bar">
+          <div id="overflow-status" class="status-pill" data-status="ok"><i data-lucide="circle-check"></i><span>单页内</span></div>
+          <button id="btn-auto-fit" class="quiet-button" type="button" hidden><i data-lucide="wand-sparkles"></i>自动适配</button>
+          <div class="canvas-spacer"></div>
+          <label class="zoom-control"><i data-lucide="zoom-out"></i><input id="zoom-slider" type="range" min="50" max="130" value="92" step="2" aria-label="预览缩放"><output id="zoom-value">92%</output></label>
         </div>
-        <div class="photo-controls" hidden>
-          <label class="toolbar-label">裁切</label>
-          <input type="range" id="photo-scale" class="toolbar-range" min="0.5" max="2" step="0.01" value="1">
-          <button id="btn-photo-reset" class="toolbar-btn" title="恢复照片默认位置">重置</button>
+        <div id="canvas-scroll">
+          <div id="mobile-editor" aria-label="结构化内容编辑"></div>
+          <div id="paper-stage"><article id="resume-paper" aria-label="简历打印预览"></article></div>
         </div>
-      </div>
-      <div class="toolbar-group toolbar-primary-actions">
-        <button id="btn-fix-overflow" class="toolbar-btn" title="修复 A4 内容溢出" hidden>
-          <span class="btn-label" id="btn-fix-label">修复溢出</span>
-        </button>
-        <button id="btn-save" class="toolbar-btn toolbar-btn-primary" title="保存当前简历">
-          <span class="btn-label">保存</span>
-        </button>
-        <button id="btn-export-pdf" class="toolbar-btn" title="通过浏览器导出 PDF">
-          <span class="btn-label">导出 PDF</span>
-        </button>
-      </div>
-    </aside>
-
-    <div id="privacy-notice" role="note" aria-label="隐私说明">
-      <strong>仅用于简历排版</strong>
-      <span>本工具不收集或上传你的简历信息；内容只在当前浏览器本地处理，并可能保存在本地浏览器存储中。</span>
+        <div id="selection-toolbar" role="toolbar" aria-label="选区工具" hidden>
+          <button type="button" data-ai-rewrite="professional"><i data-lucide="sparkles"></i>专业化</button>
+          <button type="button" data-ai-rewrite="concise">精炼</button>
+          <button type="button" data-ai-rewrite="impact">结果导向</button>
+        </div>
+      </main>
+      <aside id="inspector" aria-label="检查器">
+        <button id="inspector-handle" type="button" aria-label="展开或收起检查器" aria-expanded="false"><span></span></button>
+        <div class="inspector-tabs" role="tablist">
+          <button type="button" class="active" data-inspector-tab="layout" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal"></i><span>版式</span></button>
+          <button type="button" data-inspector-tab="checks" role="tab" aria-selected="false"><i data-lucide="list-checks"></i><span>检查</span></button>
+          <button type="button" data-inspector-tab="ai" role="tab" aria-selected="false"><i data-lucide="sparkles"></i><span>AI</span></button>
+        </div>
+        <section id="inspector-layout" class="inspector-panel active">
+          <div class="inspector-section"><h2>页面</h2><div class="segmented-control full" role="group" aria-label="纸张大小"><button type="button" data-paper="A4" class="active">A4</button><button type="button" data-paper="Letter">US Letter</button></div></div>
+          <div class="inspector-section">
+            <div class="control-row"><label for="font-size">字号</label><output id="font-size-value">10 pt</output></div><input id="font-size" class="range-control" type="range" min="7.5" max="12" step="0.1" value="10">
+            <div class="control-row"><label for="line-height">行高</label><output id="line-height-value">1.50</output></div><input id="line-height" class="range-control" type="range" min="1.15" max="1.85" step="0.01" value="1.5">
+            <div class="control-row"><label for="section-gap">栏目间距</label><output id="section-gap-value">3.6 mm</output></div><input id="section-gap" class="range-control" type="range" min="1" max="8" step="0.1" value="3.6">
+          </div>
+          <div class="inspector-section"><div class="control-row"><span>证件照</span><label class="switch"><input id="photo-toggle" type="checkbox"><span></span></label></div><button id="btn-photo" class="inspector-command" type="button"><i data-lucide="image-plus"></i>选择或调整照片</button></div>
+        </section>
+        <section id="inspector-checks" class="inspector-panel">
+          <div class="inspector-section checks-heading"><h2>机器可读性</h2><p>逐项规则，不代表真实 ATS 通过率。</p></div>
+          <div id="readability-checks" class="check-list"></div>
+        </section>
+        <section id="inspector-ai" class="inspector-panel">
+          <div class="inspector-section ai-status-section"><div class="control-row"><h2>AI 助手</h2><span id="ai-status-badge" class="connection-badge">未配置</span></div><p>仅在你点击改写、审阅或 JD 对照时发送相应文本。</p></div>
+          <div class="inspector-section"><button id="btn-review-resume" class="inspector-command strong" type="button"><i data-lucide="scan-search"></i>全文审阅</button><button id="btn-jd-compare" class="inspector-command" type="button"><i data-lucide="file-search"></i>JD 对照</button></div>
+          <div id="ai-results" class="ai-results" aria-live="polite"></div>
+        </section>
+      </aside>
     </div>
-
-    <main id="workspace">
-      <div id="add-gutter" class="no-print"></div>
-      <section id="resume-page" data-theme="a">
-        <div id="resume-content">
-          <header id="resume-header">
-            <div id="header-info">
-              <button id="header-position-handle" class="header-position-handle no-print" type="button"
-                title="上下拖动姓名区域；双击恢复居中" aria-label="上下调整姓名区域位置">
-                <span aria-hidden="true">↕</span>
-                <span class="header-position-value" aria-hidden="true">0.0 mm</span>
-              </button>
-              <h1 id="profile-name" class="editable-placeholder" data-empty="true" data-placeholder="姓名"></h1>
-              <p id="profile-headline" class="editable-placeholder" data-empty="true" data-placeholder="求职方向"></p>
-              <div id="contact-info"></div>
-            </div>
-            <div id="photo-container" data-empty="true"></div>
-          </header>
-          <div id="resume-sections"></div>
-        </div>
-      </section>
-    </main>
-
-    <aside id="resume-list-panel">
-      <div class="panel-header">
-        <span id="panel-dir-name" class="panel-dir-name" title="">简历版本</span>
-        <details class="toolbar-menu panel-import-menu" id="import-menu">
-          <summary class="toolbar-btn panel-import-btn" title="导入简历内容">
-            <span>导入</span>
-            <span class="toolbar-caret">⌄</span>
-          </summary>
-          <div class="toolbar-popover toolbar-action-options">
-            <div class="toolbar-menu-section">
-              <button id="btn-pick-dir" class="toolbar-btn" title="选择文件夹并识别其中符合简历格式的 Markdown 和 JSON">导入文件夹</button>
-              <button id="btn-import-md" class="toolbar-btn" title="导入单个 Markdown 文件">导入 Markdown</button>
-              <button id="btn-import-json-file" class="toolbar-btn" title="导入单个 JSON 文件">导入 JSON</button>
-            </div>
-            <div class="toolbar-menu-section toolbar-menu-secondary">
-              <button id="btn-paste-md" class="toolbar-btn" title="粘贴 Markdown 内容">粘贴 Markdown</button>
-              <button id="btn-paste-json" class="toolbar-btn" title="粘贴 JSON 内容">粘贴 JSON</button>
-              <button id="btn-show-md-example" class="toolbar-btn" title="查看 Markdown 格式示例">Markdown 示例</button>
-              <button id="btn-show-json-example" class="toolbar-btn" title="查看 JSON 格式示例">JSON 示例</button>
-            </div>
-          </div>
-        </details>
-        <details class="toolbar-menu panel-import-menu" id="prompt-menu">
-          <summary class="toolbar-btn panel-import-btn" title="复制文件转换提示词">
-            <span id="prompt-menu-label">转换提示词</span>
-            <span class="toolbar-caret">⌄</span>
-          </summary>
-          <div class="toolbar-popover toolbar-action-options toolbar-prompt-options">
-            <div class="toolbar-menu-heading">PDF 简历</div>
-            <div class="toolbar-prompt-actions">
-              <button id="btn-copy-pdf-to-md" class="toolbar-btn" title="复制 PDF 转 Markdown 提示词">转 Markdown</button>
-              <button id="btn-copy-pdf-to-json" class="toolbar-btn" title="复制 PDF 转 JSON 提示词">转 JSON</button>
-            </div>
-            <div class="toolbar-menu-heading">Word / DOCX 简历</div>
-            <div class="toolbar-prompt-actions">
-              <button id="btn-copy-docx-to-md" class="toolbar-btn" title="复制 Word 转 Markdown 提示词">转 Markdown</button>
-              <button id="btn-copy-docx-to-json" class="toolbar-btn" title="复制 Word 转 JSON 提示词">转 JSON</button>
-            </div>
-          </div>
-        </details>
-        <button id="btn-refresh-dir" class="panel-icon-btn" title="刷新列表" hidden>↻</button>
-      </div>
-      <div id="panel-import-status" class="panel-import-status" role="status" aria-live="polite" hidden></div>
-      <ul id="resume-list"></ul>
-      <div id="panel-empty" class="panel-empty">
-        暂无导入文件
-      </div>
-    </aside>
-
-    <div id="status-region"></div>
-    <div id="dialog-root"></div>
   </div>
-
-  <input type="file" id="file-input-md" accept=".md,.markdown,text/markdown,text/plain" hidden>
-  <input type="file" id="file-input-directory" accept=".md,.markdown,.json,text/markdown,text/plain,application/json" webkitdirectory directory multiple hidden>
-  <input type="file" id="file-input-json" accept=".json,application/json" hidden>
-  <input type="file" id="file-input-photo" accept="image/jpeg,image/png,image/webp" hidden>
-
+  <input id="resume-file-input" type="file" accept=".md,.markdown,.json,.pdf,.docx,text/markdown,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+  <input id="photo-file-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+  <div id="modal-root" aria-live="polite"></div>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+  <script id="embedded-resume-state" type="application/json">{}</script>
   <!-- __SCRIPTS__ -->
 </body>
 </html>

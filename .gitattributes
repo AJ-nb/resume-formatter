@@ -1,0 +1,3 @@
+index.html whitespace=-trailing-space
+resume-formatter.html whitespace=-trailing-space
+dist/resume-formatter.html whitespace=-trailing-space
