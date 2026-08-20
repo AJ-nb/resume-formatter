@@ -79,6 +79,10 @@ test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销"
 
   await page.locator("#btn-ai-settings").click();
   await page.locator(".modal select").selectOption("custom");
+  const rememberCheckbox = page.getByLabel("记住到本机");
+  const rememberBox = await rememberCheckbox.boundingBox();
+  expect(rememberBox.width).toBeLessThanOrEqual(20);
+  expect(rememberBox.height).toBeLessThanOrEqual(20);
   const fields = page.locator(".modal input");
   await fields.nth(0).fill("example-model");
   await fields.nth(1).fill("https://mock.example/v1");
