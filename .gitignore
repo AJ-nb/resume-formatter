@@ -7,8 +7,13 @@
 !AGENTS.md
 !PRD.md
 !TECH_DESIGN.md
+!PRIVACY.md
+!THIRD_PARTY_NOTICES.md
 !fixtures/**/*.md
 *.json
+!package.json
+!package-lock.json
+!tsconfig.json
 !fixtures/**/*.json
 *.png
 *.jpg
@@ -22,3 +27,6 @@
 coverage/
 test-results/
 playwright-report/
+node_modules/
+output/
+.playwright-results/

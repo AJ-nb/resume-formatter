@@ -1,0 +1,132 @@
+import { clone, createDefaultDocument, migrateDocument } from "./contracts.js";
+
+const DOCUMENT_KEY = "resume-formatter:document-v2";
+const VERSION_KEY = "resume-formatter:versions-v2";
+const LEGACY_LAST_KEY = "resume-formatter:last-document";
+const UNDO_LIMIT = 100;
+
+function safeStorage(storage) {
+  try {
+    const key = "__rf_probe__";
+    storage.setItem(key, "1");
+    storage.removeItem(key);
+    return storage;
+  } catch {
+    return null;
+  }
+}
+
+export class ResumeStore {
+  constructor(storage = globalThis.localStorage) {
+    this.storage = storage ? safeStorage(storage) : null;
+    this.document = this.load();
+    this.undoStack = [];
+    this.redoStack = [];
+    this.listeners = new Set();
+    this.dirty = false;
+  }
+
+  load() {
+    if (!this.storage) return createDefaultDocument();
+    const current = this.storage.getItem(DOCUMENT_KEY);
+    if (current) {
+      try { return migrateDocument(JSON.parse(current)); } catch { /* recover below */ }
+    }
+    const legacyId = this.storage.getItem(LEGACY_LAST_KEY);
+    if (legacyId) {
+      const legacy = this.storage.getItem(`resume-formatter:draft:${legacyId}`);
+      if (legacy) {
+        try {
+          const migrated = migrateDocument(JSON.parse(legacy));
+          this.storage.setItem(DOCUMENT_KEY, JSON.stringify(migrated));
+          return migrated;
+        } catch { /* recover below */ }
+      }
+    }
+    return createDefaultDocument();
+  }
+
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  notify(reason = "update") {
+    for (const listener of this.listeners) listener(this.document, reason);
+  }
+
+  replace(document, reason = "replace", recordUndo = true) {
+    if (recordUndo) this.pushUndo(reason);
+    this.document = migrateDocument(document);
+    this.touch();
+    this.notify(reason);
+  }
+
+  transact(reason, mutator, { recordUndo = true } = {}) {
+    if (recordUndo) this.pushUndo(reason);
+    mutator(this.document);
+    this.touch();
+    this.notify(reason);
+  }
+
+  pushUndo(label) {
+    this.undoStack.push({ label, document: clone(this.document) });
+    if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift();
+    this.redoStack.length = 0;
+  }
+
+  undo() {
+    const previous = this.undoStack.pop();
+    if (!previous) return false;
+    this.redoStack.push({ label: previous.label, document: clone(this.document) });
+    this.document = previous.document;
+    this.touch();
+    this.notify("undo");
+    return true;
+  }
+
+  redo() {
+    const next = this.redoStack.pop();
+    if (!next) return false;
+    this.undoStack.push({ label: next.label, document: clone(this.document) });
+    this.document = next.document;
+    this.touch();
+    this.notify("redo");
+    return true;
+  }
+
+  touch() {
+    this.document.metadata.updatedAt = new Date().toISOString();
+    this.dirty = true;
+  }
+
+  save() {
+    if (!this.storage) return false;
+    this.document.metadata.lastSavedAt = new Date().toISOString();
+    this.storage.setItem(DOCUMENT_KEY, JSON.stringify(this.document));
+    this.dirty = false;
+    this.notify("save");
+    return true;
+  }
+
+  saveVersion(name) {
+    if (!this.storage) return null;
+    const versions = this.listVersions();
+    const version = {
+      id: `version-${Date.now()}`,
+      name: name || new Date().toLocaleString("zh-CN"),
+      createdAt: new Date().toISOString(),
+      document: clone(this.document),
+    };
+    versions.unshift(version);
+    this.storage.setItem(VERSION_KEY, JSON.stringify(versions.slice(0, 20)));
+    return version;
+  }
+
+  listVersions() {
+    if (!this.storage) return [];
+    try { return JSON.parse(this.storage.getItem(VERSION_KEY) || "[]"); } catch { return []; }
+  }
+}
+
+export const storageKeys = Object.freeze({ document: DOCUMENT_KEY, versions: VERSION_KEY });
