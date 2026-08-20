@@ -2,6 +2,11 @@ import { expect, test } from "@playwright/test";
 import JSZip from "jszip";
 import { pathToFileURL } from "node:url";
 
+const TEMPLATE_IDS = [
+  "zh-compact", "modern-sans", "classic-serif", "executive-minimal", "academic-research", "visual-two-column",
+  "international-standard", "tech-precision", "consulting-brief", "finance-ledger", "creative-studio", "startup-signal",
+];
+
 async function createDocxBuffer() {
   const zip = new JSZip();
   zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8"?>
@@ -46,11 +51,20 @@ test("导入 Markdown、编辑、模板切换、保存和撤销", async ({ page 
   await expect(page.locator("#resume-paper [data-edit-path='profile.name']")).not.toHaveText("林知远");
 
   await page.getByRole("tab", { name: "模板" }).click();
-  await expect(page.locator(".template-item")).toHaveCount(6);
-  for (const templateId of ["zh-compact", "modern-sans", "classic-serif", "executive-minimal", "academic-research", "visual-two-column"]) {
+  await expect(page.locator(".template-item")).toHaveCount(12);
+  for (const templateId of TEMPLATE_IDS) {
     await page.locator(`[data-template-id='${templateId}']`).click();
     await expect(page.locator("#resume-paper")).toHaveAttribute("data-template", templateId);
   }
+
+  await page.locator("#template-search").fill("技术");
+  await expect(page.locator(".template-item")).toHaveCount(1);
+  await expect(page.locator("[data-template-id='tech-precision']")).toBeVisible();
+  await page.locator("#template-search").fill("");
+  await page.locator("#template-category").selectOption("creative");
+  await expect(page.locator(".template-item")).toHaveCount(2);
+  await expect(page.locator("[data-template-id='creative-studio']")).toBeVisible();
+  await page.locator("#template-category").selectOption("all");
 
   const name = page.locator("#resume-paper [data-edit-path='profile.name']");
   const before = await name.textContent();
@@ -61,6 +75,14 @@ test("导入 Markdown、编辑、模板切换、保存和撤销", async ({ page 
   await expect(name).toHaveText(before);
   await page.locator("#btn-save").click();
   await expect(page.locator("#save-status")).toHaveText("已保存在本机");
+});
+
+test("十二套模板对基准样例保持单页", async ({ page }) => {
+  for (const templateId of TEMPLATE_IDS) {
+    await page.locator("#quick-template").selectOption(templateId);
+    await expect(page.locator("#resume-paper")).toHaveAttribute("data-template", templateId);
+    await expect(page.locator("#overflow-status")).toHaveAttribute("data-status", "ok");
+  }
 });
 
 test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销", async ({ page }) => {
@@ -113,6 +135,46 @@ test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销"
   expect(rewriteUser).not.toContain("林知远");
 });
 
+test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => {
+  let modelsRequest;
+  let chatRequest;
+  await page.route("https://api.biyuan.ai/v1/models", async (route) => {
+    modelsRequest = route.request();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: [{ id: "gpt-example" }, { id: "claude-example" }] }),
+    });
+  });
+  await page.route("https://api.biyuan.ai/v1/chat/completions", async (route) => {
+    chatRequest = route.request();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ choices: [{ message: { content: "{\"ok\":true}" } }] }),
+    });
+  });
+
+  await page.locator("#btn-ai-settings").click();
+  const fields = page.locator(".modal input");
+  await fields.nth(2).fill("other-provider-key");
+  await page.locator(".modal select").selectOption("biyuan");
+  await expect(fields.nth(1)).toHaveValue("https://api.biyuan.ai/v1");
+  await expect(fields.nth(0)).toHaveValue("");
+  await expect(fields.nth(2)).toHaveValue("");
+  await fields.nth(2).fill("test-key");
+  await page.getByRole("button", { name: "读取可用模型" }).click();
+  await expect(page.locator(".field-help")).toContainText("已读取 2 个");
+  expect(modelsRequest.headers().authorization).toBe("Bearer test-key");
+  expect(modelsRequest.postData()).toBeNull();
+
+  await fields.nth(0).fill("gpt-example");
+  await page.getByRole("button", { name: "测试连接并保存" }).click();
+  await expect(page.locator("#ai-status-badge")).toHaveText("彼源 AI 已连接");
+  expect(chatRequest.headers().authorization).toBe("Bearer test-key");
+  expect(Object.keys(chatRequest.postDataJSON()).sort()).toEqual(["messages", "model"]);
+});
+
 for (const viewport of [
   { width: 1440, height: 1024 },
   { width: 1280, height: 800 },
@@ -145,6 +207,10 @@ test("移动端检查器支持拖动，并保留焦点、动效与触控约束",
   await page.setViewportSize({ width: 390, height: 844 });
   const handle = page.locator("#inspector-handle");
   await expect.poll(async () => (await handle.boundingBox())?.y || 0).toBeGreaterThan(780);
+
+  await page.getByRole("tab", { name: "版式" }).click();
+  await page.locator("#quick-template").selectOption("tech-precision");
+  await expect(page.locator("#resume-paper")).toHaveAttribute("data-template", "tech-precision");
 
   await page.keyboard.press("Tab");
   const focus = await page.evaluate(() => ({

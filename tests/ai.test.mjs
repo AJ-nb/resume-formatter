@@ -4,6 +4,7 @@ import {
   AI_PROVIDERS,
   compareFacts,
   createSelectionReference,
+  listAvailableModels,
   requestStructured,
   selectionIsCurrent,
   testConnection,
@@ -36,9 +37,10 @@ test("数字、日期、比例和专有缩写变化触发事实保护", () => {
   assert.equal(validated.requiresConfirmation, true);
 });
 
-test("六类提供商连接测试使用各自协议且无主动请求", async () => {
+test("七类提供商连接测试使用各自协议且无主动请求", async () => {
   let calls = 0;
-  const fetchImpl = async (url) => { calls += 1; return responseFor(String(url)); };
+  const requests = [];
+  const fetchImpl = async (url, options) => { calls += 1; requests.push({ url: String(url), options }); return responseFor(String(url)); };
   assert.equal(calls, 0);
   for (const provider of Object.keys(AI_PROVIDERS)) {
     const defaults = AI_PROVIDERS[provider];
@@ -52,7 +54,42 @@ test("六类提供商连接测试使用各自协议且无主动请求", async ()
     assert.equal(result.testStatus, "passed");
     assert.ok(result.testedFingerprint);
   }
-  assert.equal(calls, 6);
+  assert.equal(calls, 7);
+  const biyuan = requests.find((request) => request.url === "https://api.biyuan.ai/v1/chat/completions");
+  assert.ok(biyuan);
+  assert.equal(biyuan.options.headers.Authorization, "Bearer test-key");
+  assert.deepEqual(Object.keys(JSON.parse(biyuan.options.body)).sort(), ["messages", "model"]);
+});
+
+test("彼源读取当前令牌可用模型且不发送简历内容", async () => {
+  let request;
+  const result = await listAvailableModels({
+    provider: "biyuan",
+    apiKey: "test-key",
+  }, {
+    fetchImpl: async (url, options) => {
+      request = { url: String(url), options };
+      return new Response(JSON.stringify({ data: [{ id: "gpt-example" }, { id: "claude-example" }, { id: "gpt-example" }] }), { status: 200 });
+    },
+  });
+  assert.equal(request.url, "https://api.biyuan.ai/v1/models");
+  assert.equal(request.options.method, "GET");
+  assert.equal(request.options.headers.Authorization, "Bearer test-key");
+  assert.equal(request.options.body, undefined);
+  assert.deepEqual(result.models, ["gpt-example", "claude-example"]);
+});
+
+test("彼源模型读取覆盖认证、空列表和非法响应", async () => {
+  const config = { provider: "biyuan", apiKey: "test-key" };
+  await assert.rejects(() => listAvailableModels(config, {
+    fetchImpl: async () => new Response("Invalid token", { status: 401 }),
+  }), /认证失败/);
+  await assert.rejects(() => listAvailableModels(config, {
+    fetchImpl: async () => new Response("{broken", { status: 200 }),
+  }), /无法解析的 JSON/);
+  await assert.rejects(() => listAvailableModels(config, {
+    fetchImpl: async () => new Response(JSON.stringify({ data: [] }), { status: 200 }),
+  }), /没有返回可用模型/);
 });
 
 test("401、CORS、超时、取消与非法响应均给出失败", async () => {

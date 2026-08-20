@@ -1,12 +1,22 @@
 import { documentToPlainText } from "./contracts.js";
 
 export const AI_PROVIDERS = Object.freeze({
-  openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-5-mini", protocol: "responses", keyRequired: true },
-  deepseek: { name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat", protocol: "chat", keyRequired: true },
-  gemini: { name: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.5-flash", protocol: "gemini", keyRequired: true },
-  openrouter: { name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-5-mini", protocol: "chat", keyRequired: true },
-  ollama: { name: "Ollama", baseUrl: "http://localhost:11434/v1", model: "qwen3:8b", protocol: "chat", keyRequired: false },
-  custom: { name: "自定义兼容端点", baseUrl: "", model: "", protocol: "chat", keyRequired: true },
+  openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-5-mini", protocol: "responses", keyRequired: true, structuredOutput: "json_schema" },
+  deepseek: { name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat", protocol: "chat", keyRequired: true, structuredOutput: "json_object" },
+  gemini: { name: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.5-flash", protocol: "gemini", keyRequired: true, structuredOutput: "json_schema" },
+  openrouter: { name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-5-mini", protocol: "chat", keyRequired: true, structuredOutput: "json_schema" },
+  biyuan: {
+    name: "彼源 AI",
+    baseUrl: "https://api.biyuan.ai/v1",
+    model: "",
+    protocol: "chat",
+    keyRequired: true,
+    structuredOutput: "prompt",
+    minimalChatRequest: true,
+    supportsModelDiscovery: true,
+  },
+  ollama: { name: "Ollama", baseUrl: "http://localhost:11434/v1", model: "qwen3:8b", protocol: "chat", keyRequired: false, structuredOutput: "json_object" },
+  custom: { name: "自定义兼容端点", baseUrl: "", model: "", protocol: "chat", keyRequired: true, structuredOutput: "json_schema" },
 });
 
 export const REWRITE_MODES = Object.freeze({
@@ -220,11 +230,11 @@ function outputFromResponses(data) {
   throw new Error("OpenAI Responses 返回中缺少文本输出。");
 }
 
-function validateConfig(config) {
+function validateConfig(config, { requireModel = true } = {}) {
   const value = normalizeAIConfig(config);
   const provider = AI_PROVIDERS[value.provider];
   if (!value.baseUrl) throw new Error("请填写 Base URL。");
-  if (!value.model) throw new Error("请填写模型名称。");
+  if (requireModel && !value.model) throw new Error("请填写模型名称。");
   if (provider.keyRequired && !value.apiKey) throw new Error("请填写 API Key。");
   let parsed;
   try { parsed = new URL(value.baseUrl); } catch { throw new Error("Base URL 不是有效网址。"); }
@@ -282,15 +292,18 @@ async function callResponses(config, system, user, schema, options) {
 }
 
 async function callChat(config, system, user, schema, options) {
+  const provider = AI_PROVIDERS[config.provider];
   const body = {
     model: config.model,
     messages: [{ role: "system", content: system }, { role: "user", content: user }],
-    temperature: 0.2,
-    stream: false,
   };
-  if (config.provider === "openrouter" || config.provider === "custom") {
+  if (!provider.minimalChatRequest) {
+    body.temperature = 0.2;
+    body.stream = false;
+  }
+  if (provider.structuredOutput === "json_schema") {
     body.response_format = { type: "json_schema", json_schema: { name: "resume_formatter_result", strict: true, schema } };
-  } else {
+  } else if (provider.structuredOutput === "json_object") {
     body.response_format = { type: "json_object" };
   }
   const response = await fetchWithTimeout(`${config.baseUrl}/chat/completions`, {
@@ -302,6 +315,27 @@ async function callChat(config, system, user, schema, options) {
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("兼容端点返回中缺少 message.content。");
   return parseJsonText(content);
+}
+
+export async function listAvailableModels(config, options = {}) {
+  const value = validateConfig(config, { requireModel: false });
+  const provider = AI_PROVIDERS[value.provider];
+  if (!provider.supportsModelDiscovery) throw new Error("当前提供商不支持在应用内读取模型列表。");
+  const fetchImpl = options.fetchImpl || globalThis.fetch?.bind(globalThis);
+  if (!fetchImpl) throw new Error("当前环境不支持网络请求。");
+  const response = await fetchWithTimeout(`${value.baseUrl}/models`, {
+    method: "GET",
+    headers: openAIHeaders(value),
+  }, options.timeoutMs || 15_000, fetchImpl, options.signal);
+  let data;
+  try { data = await response.json(); } catch { throw new Error("模型列表返回了无法解析的 JSON。"); }
+  const source = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
+  const models = [...new Set(source
+    .map((item) => typeof item === "string" ? item : item?.id || item?.name)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean))];
+  if (!models.length) throw new Error("接口没有返回可用模型，请检查令牌权限或分组设置。");
+  return { provider: value.provider, models };
 }
 
 async function callGemini(config, system, user, schema, options) {

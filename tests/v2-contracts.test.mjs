@@ -96,10 +96,13 @@ person@example.com
   assert.equal(sanitizePlainText("<img src=x onerror=alert(1)>\u0000"), "<img src=x onerror=alert(1)>");
 });
 
-test("六套模板具有独立合同，版式覆盖值被夹紧", () => {
-  assert.equal(TEMPLATES.length, 6);
-  assert.equal(new Set(TEMPLATES.map((item) => item.id)).size, 6);
+test("十二套模板具有独立合同，版式覆盖值被夹紧", () => {
+  assert.equal(TEMPLATES.length, 12);
+  assert.equal(new Set(TEMPLATES.map((item) => item.id)).size, 12);
   assert.equal(TEMPLATES.find((item) => item.id === "visual-two-column").machineReadability, "caution");
+  assert.equal(TEMPLATES.find((item) => item.id === "creative-studio").structure, "two-column");
+  assert.ok(TEMPLATES.filter((item) => item.machineReadability === "caution").every((item) => item.structure === "two-column"));
+  assert.ok(TEMPLATES.every((item) => item.readabilityNote && item.keywords.length));
   const document = createDefaultDocument();
   document.layout.paper = "Letter";
   document.layout.tokenOverrides = { fontSize: 99, lineHeight: 0.2, sectionGap: 30, accent: "javascript:red" };

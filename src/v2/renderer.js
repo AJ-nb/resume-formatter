@@ -182,8 +182,9 @@ export function renderDocument(doc, paper) {
     summary.append(editable("p", "summary-text", doc.summary, "summary", "个人摘要"));
     content.append(summary);
   }
-  const sections = element("div", `resume-sections${layout.template.id === "visual-two-column" ? " two-column" : ""}`);
-  if (layout.template.id === "visual-two-column") {
+  const isTwoColumn = layout.template.structure === "two-column";
+  const sections = element("div", `resume-sections${isTwoColumn ? " two-column" : ""}`);
+  if (isTwoColumn) {
     const side = element("div", "resume-column side");
     const main = element("div", "resume-column main");
     const sideTypes = new Set(["education", "skills", "certifications", "awards", "languages"]);
@@ -246,7 +247,7 @@ export function checkMachineReadability(doc) {
   add(doc.profile.name?.trim() ? "pass" : "warning", "NAME", "姓名", doc.profile.name?.trim() ? "存在明确姓名。" : "缺少姓名。", "profile.name");
   add(doc.profile.email?.trim() || doc.profile.phone?.trim() ? "pass" : "warning", "CONTACT", "联系方式", doc.profile.email || doc.profile.phone ? "至少提供了一项联系方式。" : "缺少邮箱或电话。", "profile.email");
   const template = getTemplate(doc.layout.templateId);
-  add(template.machineReadability === "caution" ? "warning" : "pass", "LAYOUT", "版式结构", template.machineReadability === "caution" ? "两栏阅读顺序可能因解析器而异。" : "当前模板为单栏顺序结构。", "layout.templateId");
+  add(template.machineReadability === "caution" ? "warning" : "pass", "LAYOUT", "版式结构", template.readabilityNote, "layout.templateId");
   const bullets = doc.sections.flatMap((section) => section.entries.flatMap((entry) => entry.bullets));
   const long = bullets.filter((bullet) => bullet.text.length > 180);
   add(long.length ? "warning" : "pass", "BULLET_LENGTH", "项目符号长度", long.length ? `${long.length} 条超过 180 字，可能影响扫描阅读。` : "项目符号长度未见明显异常。");
