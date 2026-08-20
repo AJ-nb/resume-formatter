@@ -4,6 +4,7 @@ import {
   REWRITE_MODES,
   compareWithJD,
   createSelectionReference,
+  listAvailableModels,
   loadAIConfig,
   normalizeAIConfig,
   reviewResume,
@@ -14,6 +15,7 @@ import {
 } from "./ai.js";
 import {
   SECTION_DEFINITIONS,
+  TEMPLATE_CATEGORIES,
   TEMPLATES,
   clone,
   createEmptyEntry,
@@ -42,6 +44,8 @@ let aiConfig = loadAIConfig();
 let activeSelection = null;
 let overflowState = { overflow: false, overflowPx: 0, firstPath: "" };
 let renderFrame = 0;
+let templateQuery = "";
+let templateCategory = "all";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -119,6 +123,68 @@ function formField(label, control, full = false) {
   return wrapper;
 }
 
+function renderTemplateCards(doc, grid, count) {
+  const query = templateQuery.trim().toLocaleLowerCase("zh-CN");
+  const matches = TEMPLATES.filter((template) => {
+    const categoryMatch = templateCategory === "all" || template.category === templateCategory;
+    const haystack = [template.name, template.description, ...template.keywords].join(" ").toLocaleLowerCase("zh-CN");
+    return categoryMatch && (!query || haystack.includes(query));
+  });
+  count.textContent = `${matches.length} / ${TEMPLATES.length} 套`;
+  grid.replaceChildren();
+  for (const template of matches) {
+    const button = node("button", `template-item${doc.layout.templateId === template.id ? " active" : ""}`);
+    button.type = "button";
+    button.dataset.templateId = template.id;
+    button.setAttribute("aria-pressed", String(doc.layout.templateId === template.id));
+    const swatch = node("div", "template-swatch");
+    swatch.dataset.preview = template.preview;
+    swatch.style.setProperty("--swatch", template.tokens.accent);
+    const previewBody = node("span", "template-preview-body");
+    previewBody.append(node("span", "template-preview-line"), node("span", "template-preview-line"), node("span", "template-preview-line"));
+    swatch.append(node("span", "template-preview-name"), node("span", "template-preview-meta"), previewBody);
+    const title = node("div", "template-title-row");
+    title.append(node("strong", "", template.name), node("span", `template-structure${template.machineReadability === "caution" ? " caution" : ""}`, template.structure === "two-column" ? "双栏" : "单栏"));
+    button.append(swatch, title, node("small", "", template.description));
+    grid.append(button);
+  }
+  if (!matches.length) grid.append(node("p", "template-empty", "没有匹配模板"));
+}
+
+function renderTemplatePanel(doc) {
+  const root = $("#template-list");
+  root.replaceChildren();
+  const tools = node("div", "template-tools");
+  const search = node("label", "template-search");
+  const searchIcon = node("i"); searchIcon.dataset.lucide = "search";
+  const searchInput = node("input");
+  searchInput.id = "template-search";
+  searchInput.type = "search";
+  searchInput.placeholder = "搜索模板";
+  searchInput.setAttribute("aria-label", "搜索模板");
+  searchInput.value = templateQuery;
+  search.append(searchIcon, searchInput);
+  const category = node("select", "template-category");
+  category.id = "template-category";
+  category.setAttribute("aria-label", "模板方向");
+  for (const item of TEMPLATE_CATEGORIES) {
+    const option = node("option", "", item.label); option.value = item.id; category.append(option);
+  }
+  category.value = templateCategory;
+  const count = node("span", "template-count");
+  tools.append(search, category, count);
+  const grid = node("div", "template-grid");
+  const update = () => {
+    templateQuery = searchInput.value;
+    templateCategory = category.value;
+    renderTemplateCards(doc, grid, count);
+  };
+  searchInput.addEventListener("input", update);
+  category.addEventListener("change", update);
+  root.append(tools, grid);
+  renderTemplateCards(doc, grid, count);
+}
+
 function renderSidebar(doc) {
   const nav = $("#section-nav");
   nav.replaceChildren();
@@ -137,17 +203,7 @@ function renderSidebar(doc) {
     nav.append(button);
   }
 
-  const templateList = $("#template-list");
-  templateList.replaceChildren();
-  for (const template of TEMPLATES) {
-    const button = node("button", `template-item${doc.layout.templateId === template.id ? " active" : ""}`);
-    button.type = "button";
-    button.dataset.templateId = template.id;
-    const swatch = node("div", "template-swatch");
-    swatch.style.setProperty("--swatch", template.tokens.accent);
-    button.append(swatch, node("strong", "", template.name), node("small", "", template.description));
-    templateList.append(button);
-  }
+  renderTemplatePanel(doc);
 
   const versionList = $("#version-list");
   versionList.replaceChildren();
@@ -190,6 +246,7 @@ function syncControls(doc) {
   }
   $("#photo-toggle").checked = layout.showPhoto;
   $("#photo-toggle").disabled = !layout.template.supportsPhoto;
+  $("#quick-template").value = layout.template.id;
   for (const button of $$('[data-paper]')) button.classList.toggle("active", button.dataset.paper === layout.paper);
   $("#save-status").textContent = store.dirty ? "有未保存更改" : "已保存在本机";
   $("#btn-undo").disabled = store.undoStack.length === 0;
@@ -393,19 +450,45 @@ function openAISettings() {
     const option = node("option", "", item.name); option.value = id; provider.append(option);
   }
   const baseUrl = node("input"); baseUrl.type = "url";
-  const model = node("input");
+  const model = node("input"); model.placeholder = "输入模型 ID"; model.autocomplete = "off";
+  const modelList = node("datalist"); modelList.id = "ai-model-options"; model.setAttribute("list", modelList.id);
+  const modelStatus = node("p", "field-help"); modelStatus.hidden = true;
   const apiKey = node("input"); apiKey.type = "password"; apiKey.autocomplete = "off"; apiKey.dataset.sensitive = "true";
   const remember = node("input"); remember.type = "checkbox";
   const rememberLabel = node("label", "remember-control"); rememberLabel.append(remember, node("span", "", "记住到本机"));
+  const modelsButton = modalButton("读取可用模型", "", async () => {
+    const candidate = normalizeAIConfig({ provider: provider.value, baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, remember: remember.checked });
+    modelsButton.disabled = true;
+    modelsButton.textContent = "读取中...";
+    modelStatus.hidden = true;
+    try {
+      const result = await listAvailableModels(candidate);
+      modelList.replaceChildren(...result.models.map((id) => {
+        const option = node("option"); option.value = id; return option;
+      }));
+      if (!model.value.trim() && result.models.length === 1) model.value = result.models[0];
+      modelStatus.textContent = `已读取 ${result.models.length} 个当前令牌可用模型，请在模型框中选择或输入。`;
+      modelStatus.hidden = false;
+      model.focus();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      modelsButton.disabled = false;
+      modelsButton.textContent = "读取可用模型";
+    }
+  });
   const fill = (config) => {
     provider.value = config.provider;
     baseUrl.value = config.baseUrl;
     model.value = config.model;
     apiKey.value = config.apiKey;
     remember.checked = config.remember;
+    modelList.replaceChildren();
+    modelStatus.hidden = true;
+    modelsButton.hidden = !AI_PROVIDERS[config.provider].supportsModelDiscovery;
   };
   fill(aiConfig);
-  provider.addEventListener("change", () => fill(normalizeAIConfig({ provider: provider.value, apiKey: apiKey.value, remember: remember.checked })));
+  provider.addEventListener("change", () => fill(normalizeAIConfig({ provider: provider.value, remember: remember.checked })));
   grid.append(
     formField("提供商", provider),
     formField("模型", model),
@@ -413,7 +496,8 @@ function openAISettings() {
     formField("API Key", apiKey, true),
     formField("凭据保存", rememberLabel, true),
   );
-  modal.body.append(grid, node("div", "risk-notice", "浏览器直连意味着密钥会存在于当前页面运行环境。默认仅写入 sessionStorage，关闭标签页后失效；选择“记住到本机”会以明文写入 localStorage。密钥不会进入简历、HTML、Markdown 或 JSON 导出。"));
+  modal.body.append(grid, modelList, modelStatus, node("div", "risk-notice", "浏览器直连意味着密钥会存在于当前页面运行环境。默认仅写入 sessionStorage，关闭标签页后失效；选择“记住到本机”会以明文写入 localStorage。密钥不会进入简历、HTML、Markdown 或 JSON 导出。"));
+  modal.footer.append(modelsButton);
   modal.footer.append(modalButton("取消", "", modal.close));
   const testButton = modalButton("测试连接并保存", "primary", async () => {
     const candidate = normalizeAIConfig({ provider: provider.value, baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, remember: remember.checked });
@@ -712,6 +796,11 @@ function autoFit() {
 
 function wireStaticEvents() {
   store.subscribe(renderAll);
+  const quickTemplate = $("#quick-template");
+  quickTemplate.replaceChildren(...TEMPLATES.map((template) => {
+    const option = node("option", "", template.name); option.value = template.id; return option;
+  }));
+  quickTemplate.addEventListener("change", (event) => store.transact("切换模板", (doc) => { doc.layout.templateId = event.target.value; }));
   $("#resume-paper").addEventListener("input", handlePaperInput);
   $("#resume-paper").addEventListener("focusout", handlePaperBlur);
   $("#resume-paper").addEventListener("click", handlePaperAction);

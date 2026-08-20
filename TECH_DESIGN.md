@@ -26,7 +26,7 @@ src/v2/*.js + src/styles/v2.css + src/index.template.html
 | `file-import.js` | 本地 PDF.js / Mammoth 文件读取与限制 |
 | `store.js` | 文档状态、本地草稿、版本、undo / redo |
 | `renderer.js` | 纸张 DOM、移动编辑器、机器读取规则、溢出定位、diff |
-| `ai.js` | 凭据策略、六类协议、结构化响应、选区和事实保护 |
+| `ai.js` | 凭据策略、七类提供商协议、模型读取、结构化响应、选区和事实保护 |
 | `app.js` | UI 编排、事件、导入确认、导出和用户命令 |
 
 v1 全局脚本不再保留在工作树中；历史实现可从 Git 记录追溯。匿名 Schema v1 fixture 继续用于迁移回归。
@@ -59,7 +59,7 @@ ResumeDocumentV2 {
 
 ### TemplateDefinition / LayoutProfile
 
-模板定义名称、纸张能力、照片能力、机器读取标签和默认令牌。用户覆盖值只允许字号、行高、栏目间距、页边距和十六进制强调色，并在解析时夹紧到安全范围。
+模板定义名称、方向、关键词、缩略预览、单 / 双栏结构、纸张能力、照片能力、机器读取标签和默认令牌。渲染器根据结构合同决定 DOM 阅读列，不通过模板 ID 推断。用户覆盖值只允许字号、行高、栏目间距、页边距和十六进制强调色，并在解析时夹紧到安全范围。
 
 ### AIProviderConfig
 
@@ -113,6 +113,7 @@ ImportResult {
 - Gemini：`generateContent` 和 `responseJsonSchema`；
 - DeepSeek / Ollama：OpenAI-compatible Chat Completions，JSON object；
 - OpenRouter / Custom：Chat Completions，JSON Schema；
+- 彼源 AI：`GET /models` 读取当前令牌可用模型；Chat Completions 只发送 `model + messages`，不强制附加可能与上游模型不兼容的 `response_format`、`temperature` 或 `stream`；
 - 所有请求支持超时与 AbortSignal；错误响应截断后展示；
 - 所有运行时网络 API 只允许位于 `src/v2/ai.js`。
 
@@ -138,7 +139,7 @@ ImportResult {
 
 ## 8. Tests
 
-Node 测试覆盖迁移、Markdown、两种 JSON、提取文本映射、模板令牌、选区哈希、事实保护、六类提供商和网络错误。
+Node 测试覆盖迁移、Markdown、两种 JSON、提取文本映射、十二套模板合同与令牌、选区哈希、事实保护、七类提供商、彼源模型读取和网络错误。
 
 Playwright 覆盖：
 

@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#f5f5f3">
   <meta name="description" content="本地优先的简历编辑与排版工具">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23191b19'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='Arial' font-size='18' font-weight='700' fill='white'%3ER%3C/text%3E%3C/svg%3E">
   <title>Resume Formatter</title>
   <!-- __STYLES__ -->
 </head>
@@ -77,7 +78,7 @@
           <button type="button" data-inspector-tab="ai" role="tab" aria-selected="false"><i data-lucide="sparkles"></i><span>AI</span></button>
         </div>
         <section id="inspector-layout" class="inspector-panel active">
-          <div class="inspector-section"><h2>页面</h2><div class="segmented-control full" role="group" aria-label="纸张大小"><button type="button" data-paper="A4" class="active">A4</button><button type="button" data-paper="Letter">US Letter</button></div></div>
+          <div class="inspector-section"><h2>模板与页面</h2><label class="inspector-field" for="quick-template"><span>模板</span><select id="quick-template" class="inspector-select"></select></label><div class="segmented-control full" role="group" aria-label="纸张大小"><button type="button" data-paper="A4" class="active">A4</button><button type="button" data-paper="Letter">US Letter</button></div></div>
           <div class="inspector-section">
             <div class="control-row"><label for="font-size">字号</label><output id="font-size-value">10 pt</output></div><input id="font-size" class="range-control" type="range" min="7.5" max="12" step="0.1" value="10">
             <div class="control-row"><label for="line-height">行高</label><output id="line-height-value">1.50</output></div><input id="line-height" class="range-control" type="range" min="1.15" max="1.85" step="0.01" value="1.5">
