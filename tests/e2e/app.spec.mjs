@@ -26,6 +26,14 @@ async function createDocxBuffer() {
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
+async function createJobVersion(page, company = "示例科技", role = "高级产品经理") {
+  await page.locator("#btn-new-application").click();
+  await page.locator(".modal").getByLabel("公司", { exact: true }).fill(company);
+  await page.locator(".modal").getByLabel("岗位", { exact: true }).fill(role);
+  await page.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(page.locator("#workspace-document-list")).toContainText(`${company} · ${role}`);
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -53,7 +61,7 @@ test("导入 Markdown、编辑、模板切换、保存和撤销", async ({ page 
   await page.getByRole("tab", { name: "模板" }).click();
   await expect(page.locator(".template-item")).toHaveCount(12);
   for (const templateId of TEMPLATE_IDS) {
-    await page.locator(`[data-template-id='${templateId}']`).click();
+    await page.locator(`#template-list [data-template-id='${templateId}']`).click();
     await expect(page.locator("#resume-paper")).toHaveAttribute("data-template", templateId);
   }
 
@@ -78,8 +86,9 @@ test("导入 Markdown、编辑、模板切换、保存和撤销", async ({ page 
 });
 
 test("十二套模板对基准样例保持单页", async ({ page }) => {
+  await page.getByRole("tab", { name: "模板" }).click();
   for (const templateId of TEMPLATE_IDS) {
-    await page.locator("#quick-template").selectOption(templateId);
+    await page.locator(`#template-list [data-template-id='${templateId}']`).click();
     await expect(page.locator("#resume-paper")).toHaveAttribute("data-template", templateId);
     await expect(page.locator("#overflow-status")).toHaveAttribute("data-status", "ok");
   }
@@ -197,6 +206,122 @@ test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => 
   expect(rewriteBody.messages[0].content).toContain('"required":["suggestion","reason"]');
 });
 
+test("母版与岗位版本独立编辑，JD 与证据形成本地闭环", async ({ page }) => {
+  const masterSummary = await page.locator("#resume-paper [data-edit-path='summary']").textContent();
+  await createJobVersion(page);
+  const jobSummary = page.locator("#resume-paper [data-edit-path='summary']");
+  await jobSummary.fill("面向示例岗位的定制摘要");
+  await jobSummary.blur();
+
+  await page.locator("#workspace-document-list .workspace-document").first().click();
+  await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveText(masterSummary);
+  await page.getByRole("button", { name: /示例科技 · 高级产品经理/ }).click();
+  await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveText("面向示例岗位的定制摘要");
+
+  await page.getByRole("tab", { name: "岗位" }).click();
+  await page.locator("#job-jd").fill("岗位要求\n- 熟悉产品策略与用户研究\n- 负责企业工作台优化\n- 有数据分析经验优先");
+  await page.locator("#btn-analyze-jd").click();
+  await expect(page.locator(".requirement-item")).toHaveCount(4);
+  await expect(page.locator(".requirement-item").first()).toContainText(/已有证据|表达缺口|无法判断/);
+
+  await page.locator("#btn-add-evidence").click();
+  await page.getByLabel("背景", { exact: true }).fill("企业工作台流程复杂");
+  await page.getByLabel("任务", { exact: true }).fill("缩短关键任务路径");
+  await page.getByLabel("个人行动", { exact: true }).fill("重构订单流程并组织用户验证");
+  await page.getByLabel("结果", { exact: true }).fill("待补充");
+  await page.locator(".modal").getByRole("combobox").first().selectOption("not-applicable");
+  await page.getByRole("button", { name: "保存证据" }).click();
+  await expect(page.locator(".evidence-item")).toContainText("重构订单流程并组织用户验证");
+});
+
+test("证据 AI 仅发送选定证据，建议可应用并原子撤销", async ({ page }) => {
+  const requests = [];
+  await page.route("https://evidence.example/v1/chat/completions", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    const isTest = body.messages.some((message) => message.content.includes('"ok"'));
+    let content = '{"ok":true}';
+    if (!isTest) {
+      const user = JSON.parse(body.messages.find((message) => message.role === "user").content);
+      content = JSON.stringify({ suggestion: "重构订单流程并组织用户验证，交付结果待补充。", evidenceIds: [user.evidence[0].id], warnings: [] });
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content } }] }) });
+  });
+  await createJobVersion(page, "证据科技", "运营经理");
+  await page.getByRole("tab", { name: "岗位" }).click();
+  await page.locator("#btn-add-evidence").click();
+  await page.getByLabel("个人行动", { exact: true }).fill("重构订单流程并组织用户验证");
+  await page.getByLabel("结果", { exact: true }).fill("待补充");
+  await page.locator(".modal").getByRole("combobox").first().selectOption("not-applicable");
+  await page.getByRole("button", { name: "保存证据" }).click();
+
+  await page.locator("#btn-ai-settings").click();
+  await page.locator(".modal select").first().selectOption("custom");
+  const fields = page.locator(".modal input");
+  await fields.nth(0).fill("evidence-model");
+  await fields.nth(1).fill("https://evidence.example/v1");
+  await fields.nth(2).fill("test-key");
+  await page.getByRole("button", { name: "测试连接并保存" }).click();
+
+  const before = await page.locator("#resume-paper [data-edit-path='summary']").textContent();
+  await page.locator(".evidence-draft-button").click();
+  await page.getByRole("button", { name: "生成建议" }).click();
+  await expect(page.getByRole("heading", { name: "证据生成建议" })).toBeVisible();
+  await page.getByRole("button", { name: "应用建议" }).click();
+  await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveText("重构订单流程并组织用户验证，交付结果待补充。");
+  await page.locator("#btn-undo").click();
+  await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveText(before);
+  expect(JSON.stringify(requests[1])).toContain("重构订单流程并组织用户验证");
+  expect(JSON.stringify(requests[1])).not.toContain("林知远");
+});
+
+test("工作区备份包含岗位资料但普通 HTML 与两类导出均不含密钥", async ({ page }) => {
+  await createJobVersion(page, "备份科技", "数据产品经理");
+  await page.getByRole("tab", { name: "岗位" }).click();
+  await page.locator("#job-jd").fill("仅用于工作区的虚构 JD 内容");
+  await page.locator("#job-jd").blur();
+  await page.locator("#btn-add-evidence").click();
+  await page.getByLabel("个人行动", { exact: true }).fill("仅用于工作区的虚构证据");
+  await page.getByLabel("结果", { exact: true }).fill("待补充");
+  await page.getByRole("button", { name: "保存证据" }).click();
+  await page.evaluate(() => sessionStorage.setItem("resume-formatter:ai-session-v2", JSON.stringify({ provider: "custom", apiKey: "WORKSPACE_SECRET" })));
+
+  await page.locator("#btn-export-menu").click();
+  const workspaceDownload = page.waitForEvent("download");
+  await page.locator("#btn-export-workspace").click();
+  await page.getByRole("button", { name: "导出备份" }).click();
+  const workspacePath = await (await workspaceDownload).path();
+  const workspaceContent = await (await import("node:fs/promises")).readFile(workspacePath, "utf8");
+  expect(workspaceContent).toContain("仅用于工作区的虚构 JD 内容");
+  expect(workspaceContent).toContain("仅用于工作区的虚构证据");
+  expect(workspaceContent).not.toContain("WORKSPACE_SECRET");
+
+  await page.locator("#btn-export-menu").click();
+  const htmlDownload = page.waitForEvent("download");
+  await page.locator("#btn-export-html").click();
+  const htmlPath = await (await htmlDownload).path();
+  const htmlContent = await (await import("node:fs/promises")).readFile(htmlPath, "utf8");
+  expect(htmlContent).not.toContain("仅用于工作区的虚构 JD 内容");
+  expect(htmlContent).not.toContain("仅用于工作区的虚构证据");
+  expect(htmlContent).not.toContain("WORKSPACE_SECRET");
+});
+
+test("投递 PDF 门禁阻止缺失姓名并允许普通备份", async ({ page }) => {
+  const name = page.locator("#resume-paper [data-edit-path='profile.name']");
+  await name.fill("");
+  await name.blur();
+  await page.locator("#btn-export-menu").click();
+  await page.locator("#btn-print").click();
+  await expect(page.getByRole("heading", { name: "投递 PDF 检查" })).toBeVisible();
+  await expect(page.locator(".readiness-item.blocker")).toContainText("姓名");
+  await expect(page.getByRole("button", { name: "打开打印对话框" })).toBeDisabled();
+  await page.getByRole("button", { name: "返回修改" }).click();
+  await page.locator("#btn-export-menu").click();
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#btn-export-json").click();
+  expect(await downloadPromise).toBeTruthy();
+});
+
 for (const viewport of [
   { width: 1440, height: 1024 },
   { width: 1280, height: 800 },
@@ -231,8 +356,10 @@ test("移动端检查器支持拖动，并保留焦点、动效与触控约束",
   await expect.poll(async () => (await handle.boundingBox())?.y || 0).toBeGreaterThan(780);
 
   await page.getByRole("tab", { name: "版式" }).click();
-  await page.locator("#quick-template").selectOption("tech-precision");
-  await expect(page.locator("#resume-paper")).toHaveAttribute("data-template", "tech-precision");
+  const recommended = page.locator("[data-recommended-template-id]").first();
+  const recommendedId = await recommended.getAttribute("data-recommended-template-id");
+  await recommended.click();
+  await expect(page.locator("#resume-paper")).toHaveAttribute("data-template", recommendedId);
 
   await page.keyboard.press("Tab");
   const focus = await page.evaluate(() => ({

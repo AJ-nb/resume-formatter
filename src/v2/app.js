@@ -4,6 +4,7 @@ import {
   REWRITE_MODES,
   compareWithJD,
   createSelectionReference,
+  draftBulletFromEvidence,
   listAvailableModels,
   loadAIConfig,
   normalizeAIConfig,
@@ -13,6 +14,7 @@ import {
   selectionIsCurrent,
   testConnection,
 } from "./ai.js";
+import { CHECK_SEVERITIES, evaluateExportReadiness, runResumeChecks } from "./checks.js";
 import {
   SECTION_DEFINITIONS,
   TEMPLATE_CATEGORIES,
@@ -29,7 +31,6 @@ import {
 import { importResumeFile } from "./file-import.js";
 import { serializeMarkdown } from "./markdown.js";
 import {
-  checkMachineReadability,
   diffWords,
   getByPath,
   locateOverflow,
@@ -38,6 +39,7 @@ import {
   setByPath,
 } from "./renderer.js";
 import { ResumeStore } from "./store.js";
+import { createWorkspaceFromLegacy, extractJDRequirements, matchRequirements, recommendTemplates } from "./workspace.js";
 
 const store = new ResumeStore();
 let aiConfig = loadAIConfig();
@@ -46,6 +48,7 @@ let overflowState = { overflow: false, overflowPx: 0, firstPath: "" };
 let renderFrame = 0;
 let templateQuery = "";
 let templateCategory = "all";
+let currentChecks = [];
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -185,7 +188,103 @@ function renderTemplatePanel(doc) {
   renderTemplateCards(doc, grid, count);
 }
 
+function renderWorkspaceDocumentList() {
+  const target = $("#workspace-document-list");
+  const workspace = store.workspace.workspace;
+  target.replaceChildren();
+  const master = workspace.documents[workspace.masterDocumentId];
+  const appendRecord = (record, label, meta, status = "") => {
+    const button = node("button", `workspace-document${record.id === workspace.activeDocumentId ? " active" : ""}`);
+    button.type = "button";
+    button.dataset.documentId = record.id;
+    const rail = node("span", `workspace-rail ${record.kind}`);
+    const copy = node("span", "workspace-document-copy");
+    copy.append(node("strong", "", label), node("small", "", meta));
+    button.append(rail, copy);
+    if (status) button.append(node("span", `document-status ${status}`, status === "applied" ? "已投递" : "草稿"));
+    target.append(button);
+  };
+  appendRecord(master, master.title || "简历母版", "所有岗位版本的来源");
+  for (const application of workspace.applications) {
+    const record = workspace.documents[application.documentId];
+    if (record) appendRecord(record, [application.company, application.role].filter(Boolean).join(" · ") || record.title, new Date(application.updatedAt).toLocaleDateString("zh-CN"), application.status);
+  }
+}
+
+function renderRecommendedTemplates(doc) {
+  const target = $("#recommended-templates");
+  const application = store.workspace.getActiveApplication();
+  target.replaceChildren();
+  for (const recommendation of recommendTemplates(doc, application || {})) {
+    const template = getTemplate(recommendation.templateId);
+    const button = node("button", `recommended-template${doc.layout.templateId === template.id ? " active" : ""}`);
+    button.type = "button";
+    button.dataset.recommendedTemplateId = template.id;
+    const swatch = node("span", "recommended-swatch");
+    swatch.style.background = template.tokens.accent;
+    const copy = node("span", "recommended-copy");
+    copy.append(node("strong", "", template.name), node("small", "", recommendation.reasons.join(" · ")));
+    button.append(swatch, copy);
+    target.append(button);
+  }
+}
+
+const MATCH_STATUS_LABELS = Object.freeze({
+  evidence: "已有证据",
+  expression_gap: "表达缺口",
+  evidence_gap: "证据缺口",
+  capability_gap: "真实能力缺口",
+  unknown: "无法判断",
+});
+
+function renderJobPanel() {
+  const application = store.workspace.getActiveApplication();
+  $("#job-empty").hidden = Boolean(application);
+  $("#job-workspace").hidden = !application;
+  if (!application) return;
+  $("#job-company").value = application.company;
+  $("#job-role").value = application.role;
+  $("#job-language").value = application.language;
+  $("#job-source-note").value = application.sourceNote;
+  $("#job-jd").value = application.jdText;
+  $("#job-jd-count").textContent = `${application.jdText.length.toLocaleString("zh-CN")} 字`;
+  $("#job-status").textContent = application.status === "applied" ? "已投递" : application.status === "ready" ? "可投递" : "草稿";
+
+  const evidenceList = $("#evidence-list");
+  evidenceList.replaceChildren();
+  if (!application.evidence.length) evidenceList.append(node("p", "panel-empty", "尚未添加事实证据"));
+  for (const evidence of application.evidence) {
+    const item = node("article", "evidence-item");
+    const title = node("div", "evidence-title");
+    title.append(node("strong", "", evidence.action || "未填写行动"), node("span", `evidence-state ${evidence.verification}`, evidence.verification === "verified" ? "已核实" : evidence.verification === "not-applicable" ? "无需核实" : "待核实"));
+    const detail = [evidence.result, evidence.scope].filter(Boolean).join(" · ");
+    const action = node("button", "evidence-draft-button", "生成 Bullet");
+    action.type = "button";
+    action.dataset.evidenceId = evidence.id;
+    item.append(title, node("p", "", detail || "等待补充结果"), action);
+    evidenceList.append(item);
+  }
+
+  const requirementList = $("#requirement-list");
+  requirementList.replaceChildren();
+  if (!application.requirementMatches.length) requirementList.append(node("p", "panel-empty", "粘贴 JD 后运行本地分析"));
+  for (const requirement of application.requirementMatches) {
+    const item = node("article", `requirement-item ${requirement.status}`);
+    const meta = node("div", "requirement-meta");
+    meta.append(node("span", "", requirement.category), node("span", "", requirement.importance === "required" ? "必要" : "优先"));
+    const select = node("select", "requirement-status");
+    select.dataset.requirementId = requirement.id;
+    for (const [value, label] of Object.entries(MATCH_STATUS_LABELS)) {
+      const option = node("option", "", label); option.value = value; select.append(option);
+    }
+    select.value = requirement.status;
+    item.append(meta, node("strong", "", requirement.excerpt), node("p", "", requirement.explanation), select);
+    requirementList.append(item);
+  }
+}
+
 function renderSidebar(doc) {
+  renderWorkspaceDocumentList();
   const nav = $("#section-nav");
   nav.replaceChildren();
   const summary = node("button", "section-nav-item", "个人摘要");
@@ -221,13 +320,23 @@ function renderSidebar(doc) {
 function renderChecks(doc) {
   const target = $("#readability-checks");
   target.replaceChildren();
-  for (const check of checkMachineReadability(doc)) {
-    const item = node("div", `check-item ${check.status}`);
+  currentChecks = runResumeChecks(doc, {
+    overflow: { ...overflowState, overflowMm: overflowState.overflowPx * 25.4 / 96 },
+    application: store.workspace.getActiveApplication(),
+  });
+  const blockerCount = currentChecks.filter((item) => item.severity === "blocker").length;
+  const warningCount = currentChecks.filter((item) => item.severity === "warning").length;
+  const summary = $("#check-summary");
+  summary.textContent = blockerCount ? `${blockerCount} 项阻断` : warningCount ? `${warningCount} 项警告` : "可以投递";
+  summary.className = `connection-badge ${blockerCount ? "blocked" : warningCount ? "warning" : "connected"}`;
+  for (const check of currentChecks) {
+    const severity = CHECK_SEVERITIES[check.severity];
+    const item = node("div", `check-item ${check.severity}`);
     const title = node("div", "check-title");
-    const icon = node("i"); icon.dataset.lucide = check.status === "pass" ? "circle-check" : "triangle-alert";
-    title.append(icon, node("span", "", check.title));
+    const icon = node("i"); icon.dataset.lucide = severity.icon;
+    title.append(icon, node("span", "", check.title), node("small", "", severity.label));
     item.append(title, node("p", "", check.detail));
-    if (check.path) item.dataset.path = check.path;
+    if (check.fieldPath) item.dataset.path = check.fieldPath;
     target.append(item);
   }
 }
@@ -246,7 +355,6 @@ function syncControls(doc) {
   }
   $("#photo-toggle").checked = layout.showPhoto;
   $("#photo-toggle").disabled = !layout.template.supportsPhoto;
-  $("#quick-template").value = layout.template.id;
   for (const button of $$('[data-paper]')) button.classList.toggle("active", button.dataset.paper === layout.paper);
   $("#save-status").textContent = store.dirty ? "有未保存更改" : "已保存在本机";
   $("#btn-undo").disabled = store.undoStack.length === 0;
@@ -269,6 +377,7 @@ function scheduleDiagnostics() {
     const statusIcon = status.querySelector("svg");
     if (statusIcon) statusIcon.outerHTML = `<i data-lucide="${overflowState.overflow ? "triangle-alert" : "circle-check"}"></i>`;
     $("#btn-auto-fit").hidden = !overflowState.overflow;
+    renderChecks(store.document);
     refreshIcons();
   });
 }
@@ -277,6 +386,8 @@ function renderAll(doc = store.document) {
   renderDocument(doc, $("#resume-paper"));
   renderMobileEditor(doc, $("#mobile-editor"));
   renderSidebar(doc);
+  renderRecommendedTemplates(doc);
+  renderJobPanel();
   renderChecks(doc);
   syncControls(doc);
   refreshIcons();
@@ -522,7 +633,7 @@ async function handleFullReview() {
   try {
     const result = await reviewResume(aiConfig, store.document);
     wait.close();
-    showInspectorTab("ai");
+    showInspectorTab("checks");
     const target = $("#ai-results");
     target.replaceChildren();
     if (!result.issues.length) target.append(node("p", "panel-empty", "没有返回具体问题。"));
@@ -537,29 +648,22 @@ async function handleFullReview() {
   } catch (error) { wait.close(); toast(error.message, "error"); }
 }
 
-function openJDCompare() {
-  const modal = openModal("JD 对照", { wide: true });
-  const textarea = node("textarea"); textarea.placeholder = "粘贴岗位描述"; textarea.rows = 10;
-  modal.body.append(formField("岗位描述", textarea, true));
-  modal.footer.append(modalButton("取消", "", modal.close));
-  modal.footer.append(modalButton("开始对照", "primary", async () => {
-    if (!textarea.value.trim()) return toast("请先粘贴岗位描述。", "error");
-    modal.close();
-    const wait = loadingModal("JD 对照");
-    try {
-      const result = await compareWithJD(aiConfig, store.document, textarea.value);
-      wait.close();
-      renderJDResults(result);
-    } catch (error) { wait.close(); toast(error.message, "error"); }
-  }));
+async function openJDCompare() {
+  const application = store.workspace.getActiveApplication();
+  if (!application?.jdText.trim()) return toast("请先在岗位面板填写 JD。", "error");
+  const wait = loadingModal("AI 补充对照");
+  try {
+    const result = await compareWithJD(aiConfig, store.document, application.jdText);
+    wait.close();
+    renderJDResults(result);
+  } catch (error) { wait.close(); toast(error.message, "error"); }
 }
 
 function renderJDResults(result) {
-  showInspectorTab("ai");
-  const target = $("#ai-results");
-  target.replaceChildren();
+  const modal = openModal("AI 岗位对照", { wide: true });
+  const target = node("div", "ai-results modal-results");
   const keywordItem = node("div", "ai-result-item");
-  keywordItem.append(node("strong", "", "本地关键词命中"));
+  keywordItem.append(node("strong", "", "确定性关键词结果"));
   const matched = result.keywords.filter((item) => item.matched).map((item) => item.keyword).join("、") || "无";
   const missing = result.keywords.filter((item) => !item.matched).map((item) => item.keyword).join("、") || "无";
   keywordItem.append(node("p", "", `命中：${matched}\n未命中：${missing}`));
@@ -569,7 +673,164 @@ function renderJDResults(result) {
     item.append(node("strong", "", suggestion.requirement), node("p", "", `已有证据：${suggestion.evidence || "无"}\n建议：${suggestion.recommendation}`));
     target.append(item);
   }
-  document.body.classList.add("inspector-open");
+  modal.body.append(node("div", "risk-notice", "以下 AI 建议与本地要求匹配分开显示，不会自动写入简历或能力状态。"), target);
+  modal.footer.append(modalButton("关闭", "primary", modal.close));
+}
+
+function openCreateApplication() {
+  const modal = openModal("创建岗位版本");
+  const grid = node("div", "form-grid");
+  const company = node("input"); company.placeholder = "示例科技";
+  const role = node("input"); role.placeholder = "高级产品经理";
+  const language = node("select");
+  for (const [value, label] of [["zh-CN", "中文"], ["en", "English"]]) {
+    const option = node("option", "", label); option.value = value; language.append(option);
+  }
+  grid.append(formField("公司", company), formField("岗位", role), formField("简历语言", language, true));
+  modal.body.append(grid, node("p", "field-help", "新版本复制当前母版并保存创建基线，之后独立编辑，不会被母版自动覆盖。"));
+  modal.footer.append(modalButton("取消", "", modal.close), modalButton("创建", "primary", () => {
+    if (!company.value.trim() && !role.value.trim()) return toast("请至少填写公司或岗位。", "error");
+    store.createApplication({ company: company.value.trim(), role: role.value.trim(), language: language.value });
+    modal.close();
+    showInspectorTab("job");
+    setInspectorOpen(true);
+    toast("岗位版本已创建。", "success");
+  }));
+}
+
+function updateActiveApplication(changes) {
+  const application = store.workspace.getActiveApplication();
+  if (!application) return;
+  store.workspace.updateApplication(application.id, changes);
+  renderSidebar(store.document);
+}
+
+function analyzeActiveJD() {
+  const application = store.workspace.getActiveApplication();
+  if (!application) return;
+  if ($("#job-jd").value !== application.jdText) store.workspace.updateApplication(application.id, { jdText: $("#job-jd").value });
+  const current = store.workspace.getActiveApplication();
+  if (!current.jdText.trim()) return toast("请先粘贴岗位描述。", "error");
+  const requirements = extractJDRequirements(current.jdText);
+  const matches = matchRequirements(store.document, current.evidence, requirements);
+  store.workspace.updateApplication(current.id, { requirementMatches: matches });
+  renderJobPanel();
+  renderRecommendedTemplates(store.document);
+  refreshIcons();
+  toast(`已本地提取 ${matches.length} 条要求。`, "success");
+}
+
+function bulletTargets() {
+  const targets = [{ path: "summary", label: "个人摘要" }];
+  for (const section of store.document.sections || []) {
+    for (const entry of section.entries || []) {
+      for (const bullet of entry.bullets || []) {
+        targets.push({
+          path: `sections.${section.id}.entries.${entry.id}.bullets.${bullet.id}.text`,
+          label: `${section.title} · ${entry.name || entry.role || "条目"} · ${bullet.text.slice(0, 24) || "空 Bullet"}`,
+        });
+      }
+    }
+  }
+  return targets;
+}
+
+function openEvidenceDialog() {
+  const application = store.workspace.getActiveApplication();
+  if (!application) return openCreateApplication();
+  const modal = openModal("添加事实证据", { wide: true });
+  const grid = node("div", "form-grid");
+  const fields = {};
+  for (const [key, label, placeholder] of [
+    ["context", "背景", "业务、团队或问题背景"],
+    ["task", "任务", "你需要完成什么"],
+    ["action", "个人行动", "明确写你亲自采取的行动"],
+    ["scope", "范围", "团队、用户、地区或项目规模；未知可留空"],
+    ["result", "结果", "实际结果；未知时填写“待补充”"],
+    ["source", "证明来源", "数据看板、项目记录或可核实联系人"],
+  ]) {
+    const control = key === "context" || key === "action" || key === "result" ? node("textarea") : node("input");
+    control.placeholder = placeholder;
+    fields[key] = control;
+    grid.append(formField(label, control, ["context", "action", "result"].includes(key)));
+  }
+  const verification = node("select");
+  for (const [value, label] of [["unverified", "待核实"], ["verified", "已核实"], ["not-applicable", "无需核实"]]) {
+    const option = node("option", "", label); option.value = value; verification.append(option);
+  }
+  const target = node("select");
+  for (const item of bulletTargets()) { const option = node("option", "", item.label); option.value = item.path; target.append(option); }
+  grid.append(formField("核实状态", verification), formField("关联简历字段", target));
+  modal.body.append(grid);
+  modal.footer.append(modalButton("取消", "", modal.close), modalButton("保存证据", "primary", () => {
+    try {
+      store.workspace.addEvidence(application.id, {
+        ...Object.fromEntries(Object.entries(fields).map(([key, control]) => [key, control.value.trim()])),
+        verification: verification.value,
+        fieldPath: target.value,
+      });
+      modal.close();
+      renderAll();
+      toast("证据已保存在当前岗位。", "success");
+    } catch (error) { toast(error.message, "error"); }
+  }));
+}
+
+function showEvidenceDraft(result, reference) {
+  const modal = openModal("证据生成建议", { wide: true });
+  const preview = node("div", "diff-preview");
+  for (const part of diffWords(reference.originalText, result.suggestion)) {
+    preview.append(node(part.type === "remove" ? "del" : part.type === "add" ? "ins" : "span", "", part.text));
+  }
+  modal.body.append(preview);
+  for (const warning of result.warnings) modal.body.append(node("div", "warning-notice", warning));
+  if (result.factWarnings.changed) modal.body.append(node("div", "fact-warning", result.factWarnings.message));
+  let confirmation = null;
+  if (result.requiresConfirmation) {
+    confirmation = node("label", "fact-confirm");
+    const input = node("input"); input.type = "checkbox";
+    confirmation.append(input, node("span", "", "我已核对证据、数字与待核实项"));
+    modal.body.append(confirmation);
+  }
+  modal.footer.append(modalButton("丢弃", "", modal.close));
+  const apply = modalButton("应用建议", "primary", async () => {
+    const current = String(getByPath(store.document, reference.fieldPath) ?? "");
+    if (!await selectionIsCurrent(reference, current)) { modal.close(); return toast("目标字段已变化，已拒绝覆盖。", "error"); }
+    store.transact("应用证据生成建议", (doc) => setByPath(doc, reference.fieldPath, result.suggestion));
+    modal.close();
+    toast("建议已应用，可通过撤销恢复。", "success");
+  });
+  if (confirmation) {
+    apply.disabled = true;
+    confirmation.querySelector("input").addEventListener("change", (event) => { apply.disabled = !event.target.checked; });
+  }
+  modal.footer.append(apply);
+}
+
+async function generateEvidenceDraft(evidenceId) {
+  const application = store.workspace.getActiveApplication();
+  const evidence = application?.evidence.find((item) => item.id === evidenceId);
+  if (!evidence) return;
+  const modal = openModal("生成简历 Bullet");
+  const target = node("select");
+  for (const item of bulletTargets()) { const option = node("option", "", item.label); option.value = item.path; target.append(option); }
+  target.value = bulletTargets().some((item) => item.path === evidence.fieldPath) ? evidence.fieldPath : target.value;
+  const requirement = node("select");
+  const none = node("option", "", "不关联具体要求"); none.value = ""; requirement.append(none);
+  for (const item of application.requirementMatches) { const option = node("option", "", item.excerpt.slice(0, 80)); option.value = item.id; requirement.append(option); }
+  modal.body.append(formField("目标字段", target, true), formField("明确选择的 JD 要求", requirement, true));
+  modal.footer.append(modalButton("取消", "", modal.close), modalButton("生成建议", "primary", async () => {
+    const original = String(getByPath(store.document, target.value) ?? "");
+    const reference = await createSelectionReference({ fieldPath: target.value, text: original, start: 0, end: original.length });
+    const selectedRequirement = application.requirementMatches.find((item) => item.id === requirement.value) || null;
+    modal.close();
+    const wait = loadingModal("证据生成建议");
+    try {
+      const result = await draftBulletFromEvidence(aiConfig, { evidence: [evidence], targetFieldPath: target.value, requirement: selectedRequirement });
+      wait.close();
+      showEvidenceDraft(result, reference);
+    } catch (error) { wait.close(); toast(error.message, "error"); }
+  }));
 }
 
 function showInspectorTab(tab) {
@@ -588,15 +849,16 @@ function wireInspectorDrag() {
   let drag = null;
   let suppressClickUntil = 0;
 
-  const finishDrag = (event, cancelled = false) => {
+  const finishDrag = (event) => {
     if (!drag || event.pointerId !== drag.pointerId) return;
-    const shouldOpen = cancelled ? drag.wasOpen : drag.offset < drag.maxOffset / 2;
-    if (drag.moved) suppressClickUntil = performance.now() + 400;
+    const currentDrag = drag;
+    drag = null;
+    const shouldOpen = currentDrag.offset < currentDrag.maxOffset / 2;
+    if (currentDrag.moved) suppressClickUntil = performance.now() + 400;
     inspector.classList.remove("inspector-dragging");
     inspector.style.removeProperty("transform");
     setInspectorOpen(shouldOpen);
     if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-    drag = null;
   };
 
   handle.addEventListener("pointerdown", (event) => {
@@ -614,15 +876,15 @@ function wireInspectorDrag() {
     inspector.classList.add("inspector-dragging");
     handle.setPointerCapture(event.pointerId);
   });
-  handle.addEventListener("pointermove", (event) => {
+  window.addEventListener("pointermove", (event) => {
     if (!drag || event.pointerId !== drag.pointerId) return;
     const delta = event.clientY - drag.startY;
     drag.moved ||= Math.abs(delta) > 4;
     drag.offset = Math.min(drag.maxOffset, Math.max(0, (drag.wasOpen ? 0 : drag.maxOffset) + delta));
     inspector.style.transform = `translateY(${drag.offset}px)`;
   });
-  handle.addEventListener("pointerup", (event) => finishDrag(event));
-  handle.addEventListener("pointercancel", (event) => finishDrag(event, true));
+  window.addEventListener("pointerup", finishDrag);
+  window.addEventListener("pointercancel", finishDrag);
   handle.addEventListener("click", () => {
     if (performance.now() < suppressClickUntil) return;
     setInspectorOpen(!document.body.classList.contains("inspector-open"));
@@ -708,6 +970,41 @@ function exportJson() {
   download(`${JSON.stringify(store.document, null, 2)}\n`, safeFileName("json"), "application/json;charset=utf-8");
 }
 
+function exportWorkspace() {
+  store.workspace.setActiveDocument(store.document);
+  const backup = store.workspace.backup();
+  const modal = openModal("导出工作区备份");
+  modal.body.append(
+    node("div", "risk-notice", "工作区 JSON 包含完整 JD、证据、岗位版本和照片资产，可能含敏感信息。文件不会包含 API Key，但请只保存在可信位置。"),
+    node("p", "field-help", `将导出 ${backup.workspace.applications.length} 个岗位任务和 ${Object.keys(backup.workspace.documents).length} 份简历文档。`),
+  );
+  modal.footer.append(modalButton("取消", "", modal.close), modalButton("导出备份", "primary", () => {
+    const date = new Date().toISOString().slice(0, 10);
+    download(`${JSON.stringify(backup, null, 2)}\n`, `resume-workspace-${date}.json`, "application/json;charset=utf-8");
+    modal.close();
+  }));
+}
+
+async function importWorkspaceFile(file) {
+  if (!file) return;
+  if (file.size > 25 * 1024 * 1024) return toast("工作区文件超过 25 MB。", "error");
+  try {
+    const backup = JSON.parse(await file.text());
+    const source = backup.backupType === "resume-formatter-workspace" ? backup.workspace : backup;
+    const applicationCount = Array.isArray(source?.applications) ? source.applications.length : 0;
+    const modal = openModal("恢复工作区");
+    modal.body.append(node("div", "warning-notice", `将用备份中的工作区替换当前工作区视图。旧的 v2 简历存储键不会删除。检测到 ${applicationCount} 个岗位任务。`));
+    modal.footer.append(modalButton("取消", "", modal.close), modalButton("确认恢复", "primary", () => {
+      try {
+        store.replaceWorkspace(backup);
+        modal.close();
+        renderAll();
+        toast("工作区已恢复，API 配置未从备份导入。", "success");
+      } catch (error) { toast(error.message, "error"); }
+    }));
+  } catch (error) { toast(`工作区无法读取：${error.message}`, "error"); }
+}
+
 function exportMarkdown() {
   download(serializeMarkdown(store.document), safeFileName("md"), "text/markdown;charset=utf-8");
 }
@@ -718,11 +1015,59 @@ function exportHtml() {
   cloneDoc.querySelector("#modal-root")?.replaceChildren();
   cloneDoc.querySelector("#toast-root")?.replaceChildren();
   cloneDoc.querySelector("#selection-toolbar")?.setAttribute("hidden", "");
+  cloneDoc.querySelector("#workspace-document-list")?.replaceChildren();
+  cloneDoc.querySelector("#evidence-list")?.replaceChildren();
+  cloneDoc.querySelector("#requirement-list")?.replaceChildren();
+  cloneDoc.querySelector("#job-workspace")?.setAttribute("hidden", "");
+  for (const id of ["job-company", "job-role", "job-language", "job-source-note", "job-jd"]) {
+    const item = cloneDoc.querySelector(`#${id}`);
+    if (item) { item.value = ""; item.textContent = ""; item.removeAttribute("value"); }
+  }
   cloneDoc.querySelectorAll("[data-sensitive]").forEach((item) => { item.value = ""; item.setAttribute("value", ""); });
   const embedded = cloneDoc.querySelector("#embedded-resume-state");
   embedded.textContent = JSON.stringify(store.document).replace(/<\/script/gi, "<\\/script");
   const html = `<!doctype html>\n${cloneDoc.outerHTML}`;
   download(html, safeFileName("html"), "text/html;charset=utf-8");
+}
+
+function openExportGate() {
+  renderChecks(store.document);
+  const modal = openModal("投递 PDF 检查", { wide: true });
+  const list = node("div", "readiness-list");
+  const warnings = currentChecks.filter((item) => item.severity === "warning");
+  const blockers = currentChecks.filter((item) => item.severity === "blocker");
+  for (const item of [...blockers, ...warnings]) {
+    const row = node("label", `readiness-item ${item.severity}`);
+    const input = node("input");
+    input.type = "checkbox";
+    input.value = item.code;
+    input.disabled = item.severity === "blocker";
+    const copy = node("span", "readiness-copy");
+    copy.append(node("strong", "", item.title), node("small", "", item.detail));
+    row.append(input, copy);
+    list.append(row);
+  }
+  if (!blockers.length && !warnings.length) list.append(node("div", "readiness-clear", "未发现阻断或待确认警告。"));
+  modal.body.append(list);
+  if (blockers.length) modal.body.prepend(node("div", "warning-notice blocker-notice", "请先修复所有阻断项。HTML、Markdown、简历 JSON 和工作区备份仍可正常导出。"));
+  else if (warnings.length) modal.body.prepend(node("p", "field-help", "逐项确认可绕过的警告后继续。"));
+  modal.footer.append(modalButton("返回修改", "", modal.close));
+  const deliver = modalButton("打开打印对话框", "primary", () => {
+    const confirmations = [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+    const readiness = evaluateExportReadiness(currentChecks, "pdf", confirmations);
+    if (!readiness.ready) return;
+    store.workspace.setActiveDocument(store.document);
+    store.workspace.recordExport("pdf", { templateId: store.document.layout.templateId, paper: store.document.layout.paper, confirmedWarnings: confirmations });
+    modal.close();
+    window.print();
+  });
+  const update = () => {
+    const confirmations = [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+    deliver.disabled = !evaluateExportReadiness(currentChecks, "pdf", confirmations).ready;
+  };
+  list.addEventListener("change", update);
+  update();
+  modal.footer.append(deliver);
 }
 
 async function compressPhoto(file) {
@@ -796,11 +1141,6 @@ function autoFit() {
 
 function wireStaticEvents() {
   store.subscribe(renderAll);
-  const quickTemplate = $("#quick-template");
-  quickTemplate.replaceChildren(...TEMPLATES.map((template) => {
-    const option = node("option", "", template.name); option.value = template.id; return option;
-  }));
-  quickTemplate.addEventListener("change", (event) => store.transact("切换模板", (doc) => { doc.layout.templateId = event.target.value; }));
   $("#resume-paper").addEventListener("input", handlePaperInput);
   $("#resume-paper").addEventListener("focusout", handlePaperBlur);
   $("#resume-paper").addEventListener("click", handlePaperAction);
@@ -814,6 +1154,7 @@ function wireStaticEvents() {
   });
   $("#btn-import").addEventListener("click", () => $("#resume-file-input").click());
   $("#resume-file-input").addEventListener("change", (event) => { handleResumeFile(event.target.files[0]); event.target.value = ""; });
+  $("#workspace-file-input").addEventListener("change", (event) => { importWorkspaceFile(event.target.files[0]); event.target.value = ""; });
   $("#btn-save").addEventListener("click", () => { store.save(); toast("草稿已保存在本机。", "success"); });
   $("#btn-undo").addEventListener("click", () => store.undo());
   $("#btn-redo").addEventListener("click", () => store.redo());
@@ -821,10 +1162,17 @@ function wireStaticEvents() {
   $("#btn-export-html").addEventListener("click", exportHtml);
   $("#btn-export-markdown").addEventListener("click", exportMarkdown);
   $("#btn-export-json").addEventListener("click", exportJson);
-  $("#btn-print").addEventListener("click", () => window.print());
+  $("#btn-import-workspace").addEventListener("click", () => $("#workspace-file-input").click());
+  $("#btn-export-workspace").addEventListener("click", exportWorkspace);
+  $("#btn-print").addEventListener("click", openExportGate);
   $("#btn-ai-settings").addEventListener("click", openAISettings);
   $("#btn-review-resume").addEventListener("click", handleFullReview);
   $("#btn-jd-compare").addEventListener("click", openJDCompare);
+  $("#btn-new-application").addEventListener("click", openCreateApplication);
+  $("#btn-create-job-empty").addEventListener("click", openCreateApplication);
+  $("#btn-add-evidence").addEventListener("click", openEvidenceDialog);
+  $("#btn-analyze-jd").addEventListener("click", analyzeActiveJD);
+  $("#btn-all-templates").addEventListener("click", () => showSidebarTab("templates"));
   $("#btn-add-section").addEventListener("click", openAddSection);
   $("#btn-photo").addEventListener("click", openPhotoDialog);
   $("#photo-toggle").addEventListener("change", (event) => store.transact("切换照片", (doc) => { doc.layout.showPhoto = event.target.checked; }));
@@ -839,6 +1187,31 @@ function wireStaticEvents() {
     const button = event.target.closest("[data-version-id]");
     const version = store.listVersions().find((item) => item.id === button?.dataset.versionId);
     if (version) store.replace(version.document, "恢复版本");
+  });
+  $("#workspace-document-list").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-document-id]");
+    if (button && button.dataset.documentId !== store.workspace.workspace.activeDocumentId) store.activateDocument(button.dataset.documentId);
+  });
+  $("#recommended-templates").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-recommended-template-id]");
+    if (button) store.transact("应用推荐模板", (doc) => { doc.layout.templateId = button.dataset.recommendedTemplateId; });
+  });
+  for (const [id, key] of [["job-company", "company"], ["job-role", "role"], ["job-language", "language"], ["job-source-note", "sourceNote"], ["job-jd", "jdText"]]) {
+    $(`#${id}`).addEventListener("change", (event) => updateActiveApplication({ [key]: event.target.value }));
+  }
+  $("#job-jd").addEventListener("input", (event) => { $("#job-jd-count").textContent = `${event.target.value.length.toLocaleString("zh-CN")} 字`; });
+  $("#evidence-list").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-evidence-id]");
+    if (button) generateEvidenceDraft(button.dataset.evidenceId);
+  });
+  $("#requirement-list").addEventListener("change", (event) => {
+    const select = event.target.closest("[data-requirement-id]");
+    const application = store.workspace.getActiveApplication();
+    if (select && application) {
+      store.workspace.setRequirementStatus(application.id, select.dataset.requirementId, select.value);
+      renderChecks(store.document);
+      refreshIcons();
+    }
   });
   $("#template-list").addEventListener("click", (event) => {
     const button = event.target.closest("[data-template-id]");
@@ -876,8 +1249,7 @@ function loadEmbeddedDocument() {
   if (!raw || raw === "{}") return;
   try {
     const embedded = migrateDocument(JSON.parse(raw));
-    store.document = embedded;
-    store.dirty = false;
+    store.replaceWorkspace(createWorkspaceFromLegacy(embedded));
   } catch (error) { toast(`内嵌简历无法读取：${error.message}`, "error"); }
 }
 

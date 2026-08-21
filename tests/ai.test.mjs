@@ -4,6 +4,7 @@ import {
   AI_PROVIDERS,
   compareFacts,
   createSelectionReference,
+  draftBulletFromEvidence,
   listAvailableModels,
   requestStructured,
   selectionIsCurrent,
@@ -169,4 +170,25 @@ test("响应体中断不会产生可应用结果", async () => {
     json: async () => { throw new SyntaxError("Unexpected end of JSON input"); },
   };
   await assert.rejects(() => requestStructured(config, { system: "s", user: "u", schema: okSchema }, { fetchImpl: async () => interrupted }), /Unexpected end/);
+});
+
+test("证据生成拒绝证据不足、非法引用并标记新增数字", async () => {
+  const base = { provider: "biyuan", apiKey: "test-key", model: "gpt-example" };
+  const connected = await testConnection(base, { fetchImpl: async () => responseFor("chat") });
+  const incomplete = [{ id: "ev-missing", action: "", result: "" }];
+  await assert.rejects(() => draftBulletFromEvidence(connected, { evidence: incomplete, targetFieldPath: "summary" }, {
+    fetchImpl: async () => { throw new Error("不应发出请求"); },
+  }), /个人行动|结果未知/);
+
+  const evidence = [{ id: "ev-1", action: "重构审批流程", result: "处理更稳定", verification: "verified", source: "虚构项目记录" }];
+  await assert.rejects(() => draftBulletFromEvidence(connected, { evidence, targetFieldPath: "summary" }, {
+    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"suggestion":"重构审批流程","evidenceIds":["ev-other"],"warnings":[]}' } }] }), { status: 200 }),
+  }), /证据引用无效/);
+
+  const result = await draftBulletFromEvidence(connected, { evidence, targetFieldPath: "summary" }, {
+    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"suggestion":"重构审批流程，将处理效率提升 99%","evidenceIds":["ev-1"],"warnings":[]}' } }] }), { status: 200 }),
+  });
+  assert.equal(result.factWarnings.changed, true);
+  assert.ok(result.factWarnings.added.includes("99%"));
+  assert.equal(result.requiresConfirmation, true);
 });

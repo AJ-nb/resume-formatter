@@ -32,8 +32,10 @@
           <div id="export-menu" class="popover-menu" role="menu" hidden>
             <button id="btn-export-html" type="button" role="menuitem"><i data-lucide="file-code-2"></i>独立 HTML</button>
             <button id="btn-export-markdown" type="button" role="menuitem"><i data-lucide="file-text"></i>Markdown</button>
-            <button id="btn-export-json" type="button" role="menuitem"><i data-lucide="braces"></i>JSON</button>
-            <button id="btn-print" type="button" role="menuitem"><i data-lucide="printer"></i>打印 PDF</button>
+            <button id="btn-export-json" type="button" role="menuitem"><i data-lucide="braces"></i>简历 JSON</button>
+            <button id="btn-import-workspace" type="button" role="menuitem"><i data-lucide="archive-restore"></i>恢复工作区</button>
+            <button id="btn-export-workspace" type="button" role="menuitem"><i data-lucide="archive"></i>工作区 JSON</button>
+            <button id="btn-print" type="button" role="menuitem"><i data-lucide="send"></i>投递 PDF</button>
           </div>
         </div>
         <button id="btn-ai-settings" class="icon-command" type="button" title="AI 设置" aria-label="AI 设置"><i data-lucide="sparkles"></i></button>
@@ -42,10 +44,13 @@
     <div id="app-body">
       <aside id="left-sidebar" aria-label="文档与模板">
         <div class="sidebar-tabs" role="tablist">
-          <button type="button" class="active" data-sidebar-tab="document" role="tab" aria-selected="true">文档</button>
+          <button type="button" class="active" data-sidebar-tab="document" role="tab" aria-selected="true">版本</button>
           <button type="button" data-sidebar-tab="templates" role="tab" aria-selected="false">模板</button>
         </div>
         <section id="sidebar-document" class="sidebar-panel active">
+          <div class="sidebar-heading"><span>母版与岗位</span><button id="btn-new-application" class="small-icon-button" type="button" title="创建岗位版本" aria-label="创建岗位版本"><i data-lucide="plus"></i></button></div>
+          <div id="workspace-document-list" class="workspace-document-list"></div>
+          <div class="sidebar-divider"></div>
           <div class="sidebar-heading"><span>栏目</span><button id="btn-add-section" class="small-icon-button" type="button" title="添加栏目" aria-label="添加栏目"><i data-lucide="plus"></i></button></div>
           <nav id="section-nav" aria-label="简历栏目"></nav>
           <div class="sidebar-divider"></div>
@@ -75,11 +80,11 @@
         <button id="inspector-handle" type="button" aria-label="展开或收起检查器" aria-expanded="false"><span></span></button>
         <div class="inspector-tabs" role="tablist">
           <button type="button" class="active" data-inspector-tab="layout" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal"></i><span>版式</span></button>
+          <button type="button" data-inspector-tab="job" role="tab" aria-selected="false"><i data-lucide="briefcase-business"></i><span>岗位</span></button>
           <button type="button" data-inspector-tab="checks" role="tab" aria-selected="false"><i data-lucide="list-checks"></i><span>检查</span></button>
-          <button type="button" data-inspector-tab="ai" role="tab" aria-selected="false"><i data-lucide="sparkles"></i><span>AI</span></button>
         </div>
         <section id="inspector-layout" class="inspector-panel active">
-          <div class="inspector-section"><h2>模板与页面</h2><label class="inspector-field" for="quick-template"><span>模板</span><select id="quick-template" class="inspector-select"></select></label><div class="segmented-control full" role="group" aria-label="纸张大小"><button type="button" data-paper="A4" class="active">A4</button><button type="button" data-paper="Letter">US Letter</button></div></div>
+          <div class="inspector-section"><div class="control-row"><h2>推荐模板</h2><button id="btn-all-templates" class="text-link" type="button">全部 12 套</button></div><div id="recommended-templates" class="recommended-templates"></div><div class="segmented-control full" role="group" aria-label="纸张大小"><button type="button" data-paper="A4" class="active">A4</button><button type="button" data-paper="Letter">US Letter</button></div></div>
           <div class="inspector-section">
             <div class="control-row"><label for="font-size">字号</label><output id="font-size-value">10 pt</output></div><input id="font-size" class="range-control" type="range" min="7.5" max="12" step="0.1" value="10">
             <div class="control-row"><label for="line-height">行高</label><output id="line-height-value">1.50</output></div><input id="line-height" class="range-control" type="range" min="1.15" max="1.85" step="0.01" value="1.5">
@@ -87,19 +92,26 @@
           </div>
           <div class="inspector-section"><div class="control-row"><span>证件照</span><label class="switch"><input id="photo-toggle" type="checkbox"><span></span></label></div><button id="btn-photo" class="inspector-command" type="button"><i data-lucide="image-plus"></i>选择或调整照片</button></div>
         </section>
-        <section id="inspector-checks" class="inspector-panel">
-          <div class="inspector-section checks-heading"><h2>机器可读性</h2><p>逐项规则，不代表真实 ATS 通过率。</p></div>
-          <div id="readability-checks" class="check-list"></div>
+        <section id="inspector-job" class="inspector-panel">
+          <div id="job-empty" class="inspector-section job-empty"><i data-lucide="briefcase-business"></i><h2>从母版创建岗位版本</h2><p>岗位信息、JD 与证据只保存在本机工作区，不进入普通简历导出。</p><button id="btn-create-job-empty" class="inspector-command strong" type="button"><i data-lucide="plus"></i>创建岗位版本</button></div>
+          <div id="job-workspace" hidden>
+            <div class="inspector-section"><div class="control-row"><h2>岗位任务</h2><span id="job-status" class="connection-badge">草稿</span></div><label class="inspector-field"><span>公司</span><input id="job-company" class="inspector-input" autocomplete="organization"></label><label class="inspector-field"><span>岗位</span><input id="job-role" class="inspector-input"></label><label class="inspector-field"><span>语言</span><select id="job-language" class="inspector-select"><option value="zh-CN">中文</option><option value="en">English</option></select></label><label class="inspector-field"><span>来源备注</span><input id="job-source-note" class="inspector-input" placeholder="招聘页面、内推或更新时间"></label></div>
+            <div class="inspector-section"><div class="control-row"><h2>岗位描述</h2><span id="job-jd-count" class="field-count">0 字</span></div><textarea id="job-jd" class="inspector-textarea" placeholder="粘贴完整 JD，仅保存在当前设备"></textarea><button id="btn-analyze-jd" class="inspector-command strong" type="button"><i data-lucide="scan-search"></i>本地分析要求</button><button id="btn-jd-compare" class="inspector-command" type="button"><i data-lucide="sparkles"></i>AI 补充对照</button></div>
+            <div class="inspector-section"><div class="control-row"><h2>事实证据</h2><button id="btn-add-evidence" class="text-link" type="button">添加</button></div><div id="evidence-list" class="evidence-list"></div></div>
+            <div class="inspector-section"><h2>要求匹配</h2><div id="requirement-list" class="requirement-list"></div></div>
+          </div>
         </section>
-        <section id="inspector-ai" class="inspector-panel">
-          <div class="inspector-section ai-status-section"><div class="control-row"><h2>AI 助手</h2><span id="ai-status-badge" class="connection-badge">未配置</span></div><p>仅在你点击改写、审阅或 JD 对照时发送相应文本。</p></div>
-          <div class="inspector-section"><button id="btn-review-resume" class="inspector-command strong" type="button"><i data-lucide="scan-search"></i>全文审阅</button><button id="btn-jd-compare" class="inspector-command" type="button"><i data-lucide="file-search"></i>JD 对照</button></div>
+        <section id="inspector-checks" class="inspector-panel">
+          <div class="inspector-section checks-heading"><div class="control-row"><h2>投递检查</h2><span id="check-summary" class="connection-badge">检查中</span></div><p>确定性规则与 AI 建议分开显示，不代表真实 ATS 通过率。</p><button id="btn-review-resume" class="inspector-command" type="button"><i data-lucide="sparkles"></i>AI 全文审阅</button></div>
+          <div id="readability-checks" class="check-list"></div>
+          <div class="inspector-section ai-status-section"><div class="control-row"><h2>AI 建议</h2><span id="ai-status-badge" class="connection-badge">未配置</span></div><p>AI 失败不会影响本地检查、证据与导出备份。</p></div>
           <div id="ai-results" class="ai-results" aria-live="polite"></div>
         </section>
       </aside>
     </div>
   </div>
   <input id="resume-file-input" type="file" accept=".md,.markdown,.json,.pdf,.docx,text/markdown,application/json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+  <input id="workspace-file-input" type="file" accept=".json,application/json" hidden>
   <input id="photo-file-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
   <div id="modal-root" aria-live="polite"></div>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>

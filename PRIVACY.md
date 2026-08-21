@@ -10,9 +10,10 @@ Resume Formatter 是本地优先工具。公开页面和离线 HTML 不包含统
 - 简历正文与布局设置；
 - 证件照；
 - 本地草稿和版本记录；
+- 简历母版、独立岗位版本、完整 JD、事实证据、要求匹配和导出记录；
 - PDF / DOCX 提取出的文字和未映射片段。
 
-草稿与版本可能写入当前来源的 `localStorage`。保存的独立 HTML 会内嵌简历状态与照片，使其可以离线重新打开。
+草稿、版本与工作区可能写入当前来源的 `localStorage`。首次工作区迁移保留旧存储键，并建立迁移前回滚副本。保存的独立 HTML 只内嵌活动简历状态与照片，使其可以离线重新打开；不会内嵌 JD、证据或岗位历史。
 
 ## AI 联网条件
 
@@ -23,6 +24,7 @@ Resume Formatter 是本地优先工具。公开页面和离线 HTML 不包含统
 | 读取可用模型 | 提供商、Base URL 和凭据；不发送简历正文 |
 | 连接测试 | 提供商、Base URL、模型、凭据和最小测试提示 |
 | 选区改写 | 选中文字、字段路径、栏目、模式、用户明确提供的 JD 上下文 |
+| 证据生成 | 用户选定的证据、目标字段和明确选择的 JD 要求 |
 | 全文审阅 | 当前简历的纯文本表示 |
 | JD 对照 | 当前简历纯文本和用户粘贴的岗位描述 |
 
@@ -43,7 +45,9 @@ API Key 默认保存在 `sessionStorage`，关闭标签页后失效。只有用�
 
 ## 导出
 
-凭据不属于 ResumeDocumentV2。HTML、Markdown、JSON 和 PDF 导出会排除 API Key 与 AI 设置。自动化测试会检查这一边界。
+凭据不属于 ResumeDocumentV2 或 ApplicationWorkspaceV1。HTML、Markdown、简历 JSON、工作区 JSON 和 PDF 导出会排除 API Key 与 AI 设置。自动化测试会检查这一边界。
+
+普通简历导出不包含 JD、证据或岗位历史。工作区 JSON 会包含这些本地敏感资料与照片资产，导出前会明确提示范围；它用于个人备份，不适合作为投递附件。
 
 ## 供应商边界
 
@@ -57,4 +61,4 @@ Ollama 默认指向本机地址，但是否只在本机处理取决于用户自�
 
 ## 清除本地数据
 
-可以通过浏览器站点数据设置清除 `localStorage` 和 `sessionStorage`。独立保存的 HTML、JSON、Markdown 和 PDF 是普通本地文件，需要由用户自行删除。
+可以通过浏览器站点数据设置清除 `localStorage` 和 `sessionStorage`。独立保存的 HTML、简历 JSON、工作区 JSON、Markdown 和 PDF 是普通本地文件，需要由用户自行删除。

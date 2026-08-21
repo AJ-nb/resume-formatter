@@ -1,4 +1,4 @@
-export const APP_VERSION = "2.1.1";
+export const APP_VERSION = "2.2.0";
 export const SCHEMA_VERSION = 2;
 
 export const SECTION_DEFINITIONS = Object.freeze([
