@@ -115,6 +115,20 @@ test("照片资产按稳定哈希去重并可恢复完整简历", () => {
   assert.equal(store.getActiveDocument().assets.photo.scale, 1.2);
 });
 
+test("工作区恢复丢弃远程照片资产与资产目录中的未知字段", () => {
+  const store = new ApplicationWorkspaceStore(new MemoryStorage());
+  const backup = createWorkspaceBackup(store.workspace);
+  const masterId = backup.workspace.masterDocumentId;
+  backup.workspace.documents[masterId].document.assets.photo = { assetId: "remote-photo", scale: 1 };
+  backup.workspace.assets = {
+    "remote-photo": { id: "remote-photo", kind: "photo", dataUrl: "https://remote.example/photo.png", apiKey: "must-not-survive" },
+  };
+  const restored = importWorkspaceBackup(backup);
+  assert.deepEqual(restored.assets, {});
+  assert.equal(restored.documents[masterId].document.assets.photo, null);
+  assert.doesNotMatch(JSON.stringify(restored), /remote\.example|must-not-survive|apiKey/);
+});
+
 test("证据要求个人行动、明确结果和已核实来源", () => {
   assert.deepEqual(validateEvidence(createEvidenceRecord({})).map((item) => item.code), ["EVIDENCE_ACTION", "EVIDENCE_RESULT"]);
   assert.deepEqual(validateEvidence(createEvidenceRecord({ action: "重构流程", result: "待补充" })), []);
@@ -162,7 +176,7 @@ test("工作区备份包含岗位资料但递归剥离凭据", () => {
   assert.doesNotMatch(serialized, /credential-value-placeholder|password-value-placeholder|"apiKey"|"password"/);
   const restored = importWorkspaceBackup(backup);
   assert.equal(restored.applications[0].company, "示例公司");
-  assert.equal(restored.documents[application.documentId].document.nested.note, "保留");
+  assert.equal(restored.documents[application.documentId].document.nested, undefined);
 });
 
 test("投递 PDF 冻结岗位快照并可复制为可编辑新版本", () => {

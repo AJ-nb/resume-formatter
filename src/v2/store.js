@@ -1,5 +1,5 @@
-import { clone, migrateDocument } from "./contracts.js";
-import { ApplicationWorkspaceStore } from "./workspace.js";
+import { clone, createBlankDocument, migrateDocument } from "./contracts.js";
+import { ApplicationWorkspaceStore, createWorkspaceFromLegacy } from "./workspace.js";
 
 const DOCUMENT_KEY = "resume-formatter:document-v2";
 const VERSION_KEY = "resume-formatter:versions-v2";
@@ -173,6 +173,17 @@ export class ResumeStore {
     this.redoStack.length = 0;
     this.dirty = false;
     this.notify("replace-workspace");
+  }
+
+  resetLocalSession(document = createBlankDocument()) {
+    this.workspace.workspace = createWorkspaceFromLegacy(document);
+    this.workspace.persist();
+    this.document = this.workspace.getActiveDocument();
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.dirty = false;
+    this.notify("clear-local-data");
+    return this.document;
   }
 }
 

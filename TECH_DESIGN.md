@@ -1,4 +1,4 @@
-# Technical Design | Resume Formatter v2.3
+# Technical Design | Resume Formatter v2.4.0
 
 ## 1. Architecture
 
@@ -29,6 +29,7 @@ src/v2/*.js + src/styles/v2.css + src/index.template.html
 | `checks.js` | ResumeCheckV2、快速扫描与 ExportReadiness，投递 PDF 门禁 |
 | `renderer.js` | 纸张 DOM、移动编辑器、机器读取规则、溢出定位、diff |
 | `ai.js` | 凭据策略、七类提供商协议、模型读取、结构化响应、选区和事实保护 |
+| `privacy.js` | 递归凭据剥离、错误脱敏、本地数据清点和前缀限定清除 |
 | `app.js` | UI 编排、事件、导入确认、导出和用户命令 |
 
 v1 全局脚本不再保留在工作树中；历史实现可从 Git 记录追溯。匿名 Schema v1 fixture 继续用于迁移回归。
@@ -57,28 +58,30 @@ ResumeDocumentV2 {
 
 标准栏目：summary、experience、education、projects、skills、certifications、awards、languages、publications、custom。
 
-迁移函数接受 v1 / v2，输出规范 v2。对已迁移文档重复执行不会刷新迁移元数据或改变 documentId。
+迁移函数接受 v1 / v2，输出规范 v2。输入通过顶层、资料、栏目、布局、资产、版本和元数据白名单重新构造；未知字段不会传播到状态或导出。对已迁移文档重复执行不会刷新迁移元数据或改变 documentId。
 
 ### TemplateDefinition / LayoutProfile
 
-模板定义名称、方向、关键词、缩略预览、单 / 双栏结构、纸张能力、照片能力、机器读取标签和默认令牌。渲染器根据结构合同决定 DOM 阅读列，不通过模板 ID 推断。用户覆盖值只允许字号、行高、栏目间距、页边距和十六进制强调色，并在解析时夹紧到安全范围。
+模板定义名称、方向、关键词、缩略预览、单 / 双栏结构、纸张能力、照片能力、机器读取标签和默认令牌。`LayoutTokenDefinition` 集中定义字号、行高、栏目间距和两轴页边距的范围、精度、单位；`DensityPreset` 只生成模板相对覆盖。渲染器根据结构合同决定 DOM 阅读列，不通过模板 ID 推断。用户覆盖值只允许五项数值和十六进制强调色，并在解析时夹紧到安全范围。
 
-### AIProviderConfig
+### AIProviderPreferences / AICredentialSession
 
 ```text
-AIProviderConfig {
+AIProviderPreferences {
   provider
   baseUrl
   model
+}
+
+AICredentialSession {
   apiKey
-  remember
   testStatus
   testedFingerprint
   testedAt
 }
 ```
 
-它存放于独立会话 / 设备存储，不属于 ResumeDocumentV2。任何关键字段变化都会使连接测试指纹失效。
+非敏感偏好可写入 `localStorage`；凭据与连接状态只写入当前标签页的 `sessionStorage`。两者都不属于 ResumeDocumentV2 或工作区，任何关键字段变化都会使连接测试指纹失效。
 
 ### AIRewriteRequest / AIRewriteResult
 
@@ -124,12 +127,12 @@ ImportResult {
 ## 5. AI Protocols
 
 - OpenAI：Responses API，`text.format.type=json_schema`，`strict=true`；
-- Gemini：`generateContent` 和 `responseJsonSchema`；
+- Gemini：`generateContent` 和 `responseJsonSchema`，凭据只通过 `x-goog-api-key` 请求头发送；
 - DeepSeek / Ollama：OpenAI-compatible Chat Completions，JSON object；
 - OpenRouter / Custom：Chat Completions，JSON Schema；
 - 彼源 AI：`GET /models` 读取当前令牌可用模型；Chat Completions 只发送 `model + messages`，在 system message 内声明结果 Schema，不强制附加可能与上游模型不兼容的 `response_format`、`temperature` 或 `stream`；
-- 所有请求支持超时与 AbortSignal；错误响应截断后展示；
-- 大范围请求通过纯数据披露对象展示供应商、模型、文本类型和实际文本字符数，确认前不调用网络适配层；
+- 所有请求支持超时与 AbortSignal；错误响应截断并经统一脱敏器处理；
+- 大范围请求通过 `AIRequestDisclosure` 展示供应商、模型、目标主机、传输安全性、文本类型和实际文本字符数，确认前不调用网络适配层；
 - 证据 Bullet 请求只包含选定 EvidenceRecord、目标字段和明确选择的要求，返回证据 ID 并继续执行事实变化检查；
 - 所有运行时网络 API 只允许位于 `src/v2/ai.js`。
 
@@ -139,16 +142,18 @@ ImportResult {
 
 纸张使用真实 mm 尺寸，屏幕只通过 `transform: scale()` 缩放。内容高度保持固定，`scrollHeight - clientHeight` 给出溢出量；第一个超出边界的条目获得可视标记。
 
-自动适配按顺序收紧栏目间距、行高和字号，均受最小可读范围限制，不删除文字。
+滑杆输入只做实时 CSS 预览，松开滑杆、数字输入失焦或按 Enter 后才通过 `store.transact()` 建立一次撤销记录。非法输入不写入文档，恢复最近有效值并保留范围提示。自动适配按顺序收紧栏目间距、行高和字号，均受最小可读范围限制，不删除文字，并作为单次操作写入撤销栈。
 
-打印媒体隐藏应用壳、编辑按钮、溢出标记和空照片占位。`verify-pdf.mjs` 使用 Chromium 生成 PDF，再由 PDF.js 校验页数、A4 点尺寸和文本层。
+打印媒体隐藏应用壳、编辑按钮、溢出标记和空照片占位。投递打印前临时将页面标题设为清理后的建议文件名，并在打印调用返回或 `afterprint` 后恢复。`verify-pdf.mjs` 使用 Chromium 生成 PDF，再由 PDF.js 校验页数、A4 点尺寸和文本层。
 
 ## 7. Security and Privacy
 
 - 导入文本通过 `textContent` / 表单 value 渲染，不注入 HTML；
 - HTML 导出克隆文档、清空 modal / toast / 选区工具和敏感表单值；
+- 独立 HTML 的状态存入惰性 `<template>`；构建为内联脚本生成 SHA-256 CSP，并设置 `Referrer-Policy: no-referrer`；
 - AI 凭据不进入简历合同；
-- AI 凭据不进入工作区合同；普通简历导出主动清空岗位动态内容，工作区备份递归剥离凭据字段；
+- AI 凭据不进入工作区合同；所有导出边界再次递归剥离凭据字段与活动密钥；
+- 本地清除只枚举并删除 `resume-formatter:` 前缀键，之后持久化空白工作区；
 - 发布脚本扫描用户路径、手机号、非示例邮箱和密钥形态；
 - 构建物禁止外部 `src` / `href`；
 - 直接依赖许可证必须位于允许列表；
@@ -167,6 +172,8 @@ Playwright 覆盖：
 - 母版三方同步、快速扫描、AI 发送前披露、投递冻结和复制继续；
 - 扫描 PDF 与损坏 DOCX；
 - 四种目标视口和移动底部检查器；
-- 导出不含 API Key。
+- 精确排版、单次撤销、非法输入恢复和建议打印标题；
+- 隐私清点、限定清除、Gemini 请求头、会话凭据遗忘和离线 CSP；
+- 导出、DOM、URL 和错误不暴露 API Key。
 
 CI 顺序：`npm ci` -> audit -> unit -> build -> release check -> Playwright -> PDF verify。

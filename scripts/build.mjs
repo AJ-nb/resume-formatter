@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import * as esbuild from "esbuild";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -62,8 +63,22 @@ async function build() {
     bundleJavaScript(),
     bundleCss(),
   ]);
+  const scriptHash = createHash("sha256").update(javascript).digest("base64");
+  const csp = [
+    "default-src 'none'",
+    `script-src 'sha256-${scriptHash}'`,
+    "style-src 'unsafe-inline'",
+    "img-src data: blob:",
+    "connect-src https: http://localhost:* http://127.0.0.1:*",
+    "worker-src blob:",
+    "child-src blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join("; ");
   const html = template
     .replace("__APP_VERSION__", packageJson.version)
+    .replace("__CSP__", csp)
     .replace("<!-- __STYLES__ -->", () => `<style>${css}</style>`)
     .replace("<!-- __SCRIPTS__ -->", () => `<script>${javascript}</script>`);
 

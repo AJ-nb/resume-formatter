@@ -1,5 +1,19 @@
-export const APP_VERSION = "2.3.0";
+export const APP_VERSION = "2.4.0";
 export const SCHEMA_VERSION = 2;
+
+export const LAYOUT_TOKEN_DEFINITIONS = Object.freeze({
+  fontSize: Object.freeze({ id: "font-size", label: "字号", min: 7.5, max: 12, step: 0.1, decimals: 1, unit: "pt" }),
+  lineHeight: Object.freeze({ id: "line-height", label: "行高", min: 1.15, max: 1.85, step: 0.01, decimals: 2, unit: "" }),
+  sectionGap: Object.freeze({ id: "section-gap", label: "栏目间距", min: 1, max: 8, step: 0.1, decimals: 1, unit: "mm" }),
+  pageMarginX: Object.freeze({ id: "page-margin-x", label: "横向页边距", min: 8, max: 28, step: 0.1, decimals: 1, unit: "mm" }),
+  pageMarginY: Object.freeze({ id: "page-margin-y", label: "纵向页边距", min: 8, max: 28, step: 0.1, decimals: 1, unit: "mm" }),
+});
+
+export const DENSITY_PRESETS = Object.freeze({
+  compact: Object.freeze({ id: "compact", label: "紧凑", offsets: Object.freeze({ fontSize: -0.3, lineHeight: -0.08, sectionGap: -0.8, pageMarginX: -1.5, pageMarginY: -1.5 }) }),
+  standard: Object.freeze({ id: "standard", label: "标准", offsets: null }),
+  spacious: Object.freeze({ id: "spacious", label: "舒展", offsets: Object.freeze({ fontSize: 0.3, lineHeight: 0.08, sectionGap: 0.8, pageMarginX: 1.5, pageMarginY: 1.5 }) }),
+});
 
 export const SECTION_DEFINITIONS = Object.freeze([
   { type: "summary", title: "个人摘要", aliases: ["个人总结", "职业概述", "summary", "profile"] },
@@ -237,30 +251,44 @@ export function createDefaultDocument() {
   };
 }
 
+export function createBlankDocument() {
+  const document = createDefaultDocument();
+  document.resumeName = "未命名简历";
+  document.profile = { name: "", headline: "", location: "", phone: "", email: "", website: "", github: "" };
+  document.summary = "";
+  document.sections = ["experience", "education", "skills"].map((type) => ({
+    ...createEmptySection(type),
+    entries: [createEmptyEntry()],
+  }));
+  document.assets = { photo: null };
+  document.layout.showPhoto = false;
+  return document;
+}
+
 function normalizeBullet(bullet) {
   if (typeof bullet === "string") return { id: createId("bullet"), text: bullet };
   return {
-    id: bullet?.id || createId("bullet"),
+    id: String(bullet?.id || createId("bullet")),
     text: tokensToText(bullet?.text ?? bullet?.content ?? ""),
   };
 }
 
 function normalizeEntry(entry = {}) {
-  return createEmptyEntry({
-    id: entry.id || createId("entry"),
+  return {
+    id: String(entry.id || createId("entry")),
     name: String(entry.name ?? entry.organization ?? ""),
     role: String(entry.role ?? entry.position ?? ""),
     date: String(entry.date ?? ""),
     location: String(entry.location ?? ""),
     summary: String(entry.summary ?? ""),
     bullets: Array.isArray(entry.bullets) ? entry.bullets.map(normalizeBullet) : [],
-  });
+  };
 }
 
 function normalizeSection(section = {}) {
   const known = SECTION_DEFINITIONS.find((item) => item.type === section.type);
   return {
-    id: section.id || createId("section"),
+    id: String(section.id || createId("section")),
     type: known ? section.type : "custom",
     title: String(section.title || known?.title || section.type || "自定义栏目"),
     entries: Array.isArray(section.entries) ? section.entries.map(normalizeEntry) : [],
@@ -275,29 +303,62 @@ export function migrateDocument(input) {
   const base = createDefaultDocument();
   const isV2 = sourceVersion === 2;
   const sourcePhoto = isV2 ? input.assets?.photo : input.photo;
+  const profile = input.profile && typeof input.profile === "object" ? input.profile : {};
+  const safePhotoData = typeof sourcePhoto?.dataUrl === "string" && /^data:image\/(?:jpeg|png|webp);base64,/i.test(sourcePhoto.dataUrl)
+    ? sourcePhoto.dataUrl
+    : "";
+  const photo = sourcePhoto && typeof sourcePhoto === "object" && (safePhotoData || typeof sourcePhoto.assetId === "string") ? {
+    ...(safePhotoData ? { dataUrl: safePhotoData } : {}),
+    ...(typeof sourcePhoto.assetId === "string" ? { assetId: sourcePhoto.assetId } : {}),
+    scale: Number.isFinite(Number(sourcePhoto.scale)) ? Math.min(2, Math.max(0.7, Number(sourcePhoto.scale))) : 1,
+    offsetX: Number.isFinite(Number(sourcePhoto.offsetX)) ? Math.min(35, Math.max(-35, Number(sourcePhoto.offsetX))) : 0,
+    offsetY: Number.isFinite(Number(sourcePhoto.offsetY)) ? Math.min(35, Math.max(-35, Number(sourcePhoto.offsetY))) : 0,
+  } : null;
+  const layoutInput = input.layout && typeof input.layout === "object" ? input.layout : {};
+  const rawOverrides = layoutInput.tokenOverrides && typeof layoutInput.tokenOverrides === "object" ? layoutInput.tokenOverrides : {};
+  const tokenOverrides = {};
+  for (const [key, definition] of Object.entries(LAYOUT_TOKEN_DEFINITIONS)) {
+    const value = Number(rawOverrides[key]);
+    if (Number.isFinite(value)) tokenOverrides[key] = Math.min(definition.max, Math.max(definition.min, value));
+  }
+  if (/^#[0-9a-f]{6}$/i.test(rawOverrides.accent || "")) tokenOverrides.accent = rawOverrides.accent.toLowerCase();
   const result = {
-    ...base,
-    ...input,
     schemaVersion: SCHEMA_VERSION,
     appVersion: APP_VERSION,
-    documentId: input.documentId || base.documentId,
+    documentId: String(input.documentId || base.documentId),
     resumeName: String(input.resumeName ?? input.resume_name ?? base.resumeName),
-    locale: input.locale || base.locale,
-    profile: { ...base.profile, ...(input.profile || {}) },
+    locale: ["zh-CN", "en"].includes(input.locale) ? input.locale : base.locale,
+    profile: {
+      name: String(profile.name ?? ""),
+      headline: String(profile.headline ?? profile.label ?? ""),
+      location: String(profile.location ?? ""),
+      phone: String(profile.phone ?? ""),
+      email: String(profile.email ?? ""),
+      website: String(profile.website ?? ""),
+      github: String(profile.github ?? ""),
+    },
     summary: String(input.summary ?? ""),
     sections: Array.isArray(input.sections) ? input.sections.map(normalizeSection) : [],
-    assets: { photo: sourcePhoto ? clone(sourcePhoto) : null },
+    assets: { photo },
     layout: {
-      ...base.layout,
-      ...(input.layout || {}),
-      templateId: input.layout?.templateId || input.layout?.theme || base.layout.templateId,
-      tokenOverrides: { ...(input.layout?.tokenOverrides || {}) },
+      templateId: layoutInput.templateId || layoutInput.theme || base.layout.templateId,
+      paper: layoutInput.paper === "Letter" ? "Letter" : "A4",
+      showPhoto: Boolean(layoutInput.showPhoto ?? photo),
+      tokenOverrides,
     },
-    versions: Array.isArray(input.versions) ? clone(input.versions) : [],
+    versions: Array.isArray(input.versions) ? input.versions.map((version) => ({
+      id: String(version?.id || createId("version")),
+      name: String(version?.name || "历史版本"),
+      createdAt: version?.createdAt ? String(version.createdAt) : null,
+    })) : [],
     migration: isV2
-      ? { sourceSchemaVersion: input.migration?.sourceSchemaVersion ?? 2, migratedAt: input.migration?.migratedAt ?? null }
+      ? { sourceSchemaVersion: Number(input.migration?.sourceSchemaVersion) === 1 ? 1 : 2, migratedAt: input.migration?.migratedAt ? String(input.migration.migratedAt) : null }
       : { sourceSchemaVersion: 1, migratedAt: new Date().toISOString() },
-    metadata: { ...base.metadata, ...(input.metadata || {}) },
+    metadata: {
+      createdAt: input.metadata?.createdAt ? String(input.metadata.createdAt) : base.metadata.createdAt,
+      updatedAt: input.metadata?.updatedAt ? String(input.metadata.updatedAt) : base.metadata.updatedAt,
+      lastSavedAt: input.metadata?.lastSavedAt ? String(input.metadata.lastSavedAt) : null,
+    },
   };
 
   const validTemplate = TEMPLATES.some((item) => item.id === result.layout.templateId);
@@ -313,7 +374,8 @@ export function getTemplate(templateId) {
 export function resolveLayout(document) {
   const selected = getTemplate(document.layout?.templateId);
   const overrides = document.layout?.tokenOverrides || {};
-  const number = (key, min, max) => {
+  const number = (key) => {
+    const { min, max } = LAYOUT_TOKEN_DEFINITIONS[key];
     const value = Number(overrides[key] ?? selected.tokens[key]);
     return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : selected.tokens[key];
   };
@@ -322,14 +384,46 @@ export function resolveLayout(document) {
     paper: document.layout?.paper === "Letter" ? "Letter" : "A4",
     showPhoto: Boolean(document.layout?.showPhoto && selected.supportsPhoto),
     tokens: {
-      fontSize: number("fontSize", 7.5, 12),
-      lineHeight: number("lineHeight", 1.15, 1.85),
-      sectionGap: number("sectionGap", 1, 8),
-      pageMarginX: number("pageMarginX", 8, 28),
-      pageMarginY: number("pageMarginY", 8, 28),
+      fontSize: number("fontSize"),
+      lineHeight: number("lineHeight"),
+      sectionGap: number("sectionGap"),
+      pageMarginX: number("pageMarginX"),
+      pageMarginY: number("pageMarginY"),
       accent: /^#[0-9a-f]{6}$/i.test(overrides.accent || "") ? overrides.accent : selected.tokens.accent,
     },
   };
+}
+
+function roundToDefinition(value, definition) {
+  const stepped = Math.round(Number(value) / definition.step) * definition.step;
+  return Number(Math.min(definition.max, Math.max(definition.min, stepped)).toFixed(definition.decimals));
+}
+
+export function layoutOverridesForDensity(templateId, presetId, currentOverrides = {}) {
+  const template = getTemplate(templateId);
+  const accent = /^#[0-9a-f]{6}$/i.test(currentOverrides.accent || "") ? currentOverrides.accent.toLowerCase() : null;
+  if (presetId === "standard") return accent ? { accent } : {};
+  const preset = DENSITY_PRESETS[presetId];
+  if (!preset?.offsets) throw new Error("未知版式密度预设。");
+  const result = {};
+  for (const [key, definition] of Object.entries(LAYOUT_TOKEN_DEFINITIONS)) {
+    result[key] = roundToDefinition(template.tokens[key] + preset.offsets[key], definition);
+  }
+  if (accent) result.accent = accent;
+  return result;
+}
+
+export function detectDensityPreset(document) {
+  const overrides = document.layout?.tokenOverrides || {};
+  for (const presetId of Object.keys(DENSITY_PRESETS)) {
+    const expected = layoutOverridesForDensity(document.layout?.templateId, presetId, overrides);
+    const numericMatch = Object.keys(LAYOUT_TOKEN_DEFINITIONS).every((key) => {
+      if (presetId === "standard") return overrides[key] == null;
+      return Number(overrides[key]) === Number(expected[key]);
+    });
+    if (numericMatch) return presetId;
+  }
+  return "custom";
 }
 
 export function documentToPlainText(document) {

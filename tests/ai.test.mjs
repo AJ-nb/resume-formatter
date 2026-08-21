@@ -7,11 +7,26 @@ import {
   createSelectionReference,
   draftBulletFromEvidence,
   listAvailableModels,
+  loadAIConfig,
+  forgetAIKey,
+  aiStorageKeys,
+  normalizeAIConfig,
   requestStructured,
+  saveAIConfig,
   selectionIsCurrent,
   testConnection,
   validateRewritePayload,
+  validateAIBaseUrl,
 } from "../src/v2/ai.js";
+
+class MemoryStorage {
+  constructor(entries = {}) { this.values = new Map(Object.entries(entries)); }
+  get length() { return this.values.size; }
+  key(index) { return [...this.values.keys()][index] ?? null; }
+  getItem(key) { return this.values.has(key) ? this.values.get(key) : null; }
+  setItem(key, value) { this.values.set(key, String(value)); }
+  removeItem(key) { this.values.delete(key); }
+}
 
 const okSchema = { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { type: "boolean" } } };
 
@@ -38,7 +53,57 @@ test("大范围 AI 请求披露提供商、模型、文本类型和字符数且�
     model: "gpt-example",
     textType: "简历全文与岗位描述",
     characterCount: 9,
+    destinationHost: "api.biyuan.ai",
+    transportSecure: true,
   });
+});
+
+test("AI 偏好可留在本机但密钥仅写入当前标签页", () => {
+  const local = new MemoryStorage();
+  const session = new MemoryStorage();
+  const saved = saveAIConfig({ provider: "biyuan", model: "gpt-example", apiKey: "session-secret", testStatus: "passed", testedFingerprint: "fp" }, session, local);
+  assert.equal(saved.apiKey, "session-secret");
+  assert.doesNotMatch(local.getItem(aiStorageKeys.preferences), /session-secret|apiKey/);
+  assert.match(session.getItem(aiStorageKeys.credentialSession), /session-secret/);
+  assert.deepEqual(Object.keys(JSON.parse(local.getItem(aiStorageKeys.preferences))).sort(), ["baseUrl", "model", "provider"]);
+  assert.deepEqual(Object.keys(JSON.parse(session.getItem(aiStorageKeys.credentialSession))).sort(), ["apiKey", "testStatus", "testedAt", "testedFingerprint"]);
+  assert.equal(loadAIConfig(session, local).apiKey, "session-secret");
+  assert.equal(loadAIConfig(new MemoryStorage(), local).testStatus, "untested");
+  const forgotten = forgetAIKey(saved, session, local);
+  assert.equal(forgotten.apiKey, "");
+  assert.equal(session.getItem(aiStorageKeys.credentialSession), null);
+  assert.ok(local.getItem(aiStorageKeys.preferences));
+});
+
+test("旧版本机明文密钥只迁移偏好并立即删除凭据", () => {
+  const local = new MemoryStorage({
+    [aiStorageKeys.legacyLocal]: JSON.stringify({ provider: "biyuan", model: "legacy-model", apiKey: "legacy-local-secret" }),
+  });
+  const loaded = loadAIConfig(new MemoryStorage(), local);
+  assert.equal(loaded.provider, "biyuan");
+  assert.equal(loaded.model, "legacy-model");
+  assert.equal(loaded.apiKey, "");
+  assert.equal(local.getItem(aiStorageKeys.legacyLocal), null);
+  assert.equal(JSON.parse(local.getItem(aiStorageKeys.preferences)).model, "legacy-model");
+});
+
+test("损坏的旧 AI 存储不会阻止凭据清除", () => {
+  const local = new MemoryStorage({
+    [aiStorageKeys.preferences]: '{"apiKey":"damaged-local-secret"',
+    [aiStorageKeys.legacyLocal]: '{"apiKey":"legacy-local-secret"}',
+  });
+  const session = new MemoryStorage({
+    [aiStorageKeys.credentialSession]: '{"apiKey":"damaged-session-secret"',
+    [aiStorageKeys.legacySession]: '{"apiKey":"legacy-session-secret"}',
+  });
+  const loaded = loadAIConfig(session, local);
+  assert.equal(loaded.apiKey, "");
+  assert.equal(local.getItem(aiStorageKeys.preferences), null);
+  assert.equal(local.getItem(aiStorageKeys.legacyLocal), null);
+  assert.equal(session.getItem(aiStorageKeys.credentialSession), null);
+  assert.equal(session.getItem(aiStorageKeys.legacySession), null);
+  forgetAIKey(loaded, session, local);
+  assert.equal(session.getItem(aiStorageKeys.credentialSession), null);
 });
 
 test("数字、日期、比例和专有缩写变化触发事实保护", () => {
@@ -74,6 +139,20 @@ test("七类提供商连接测试使用各自协议且无主动请求", async ()
   assert.ok(biyuan);
   assert.equal(biyuan.options.headers.Authorization, "Bearer test-key");
   assert.deepEqual(Object.keys(JSON.parse(biyuan.options.body)).sort(), ["messages", "model"]);
+  const gemini = requests.find((request) => request.url.includes(":generateContent"));
+  assert.ok(gemini);
+  assert.doesNotMatch(gemini.url, /test-key|[?&]key=/);
+  assert.equal(gemini.options.headers["x-goog-api-key"], "test-key");
+});
+
+test("自定义端点拒绝不安全传输、URL 凭据、查询参数和片段", () => {
+  assert.equal(validateAIBaseUrl("custom", "https://custom.example/v1").host, "custom.example");
+  assert.equal(validateAIBaseUrl("custom", "http://127.0.0.1:11434/v1").port, "11434");
+  assert.throws(() => validateAIBaseUrl("custom", "http://custom.example/v1"), /必须使用 HTTPS/);
+  assert.throws(() => validateAIBaseUrl("custom", "https://user:pass@127.0.0.1/v1"), /用户名或密码/);
+  assert.throws(() => validateAIBaseUrl("custom", "https://custom.example/v1?key=secret"), /查询参数/);
+  assert.throws(() => validateAIBaseUrl("custom", "https://custom.example/v1#token"), /片段/);
+  assert.equal(normalizeAIConfig({ provider: "custom", baseUrl: "http://[::1]:11434/v1" }).baseUrl, "http://localhost:11434/v1");
 });
 
 test("彼源读取当前令牌可用模型且不发送简历内容", async () => {
@@ -138,6 +217,17 @@ test("兼容端点区分提供商错误、截断和空最终文本", async () =>
   await assert.rejects(() => requestStructured(config, request, {
     fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: null } }] }), { status: 200 }),
   }), /没有返回最终文本/);
+});
+
+test("提供商错误不会回显活动密钥或 Bearer 凭据", async () => {
+  const config = { provider: "biyuan", apiKey: "super-secret-test-key", model: "gpt-example" };
+  await assert.rejects(() => requestStructured(config, { system: "s", user: "u", schema: okSchema }, {
+    fetchImpl: async () => new Response(`upstream echoed super-secret-test-key and Bearer another-secret-token`, { status: 500 }),
+  }), (error) => {
+    assert.doesNotMatch(error.message, /super-secret-test-key|another-secret-token/);
+    assert.match(error.message, /REDACTED/);
+    return true;
+  });
 });
 
 test("彼源模型读取覆盖认证、空列表和非法响应", async () => {

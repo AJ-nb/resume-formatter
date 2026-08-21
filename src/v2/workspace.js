@@ -7,6 +7,7 @@ import {
   documentToPlainText,
   migrateDocument,
 } from "./contracts.js";
+import { stripSensitiveData } from "./privacy.js";
 
 export const WORKSPACE_VERSION = 1;
 
@@ -15,8 +16,6 @@ const ROLLBACK_KEY = "resume-formatter:pre-workspace-rollback-v1";
 const DOCUMENT_KEY = "resume-formatter:document-v2";
 const VERSION_KEY = "resume-formatter:versions-v2";
 const LEGACY_LAST_KEY = "resume-formatter:last-document";
-
-const CREDENTIAL_FIELD = /^(?:api[-_]?key|secret|password|credential|access[-_]?token|refresh[-_]?token)$/i;
 
 function safeStorage(storage) {
   try {
@@ -61,6 +60,27 @@ function photoMime(dataUrl) {
   return String(dataUrl).match(/^data:([^;,]+)[;,]/)?.[1] || "application/octet-stream";
 }
 
+function normalizeAssetCatalog(input) {
+  const result = {};
+  if (!input || typeof input !== "object") return result;
+  for (const [key, asset] of Object.entries(input)) {
+    const dataUrl = typeof asset?.dataUrl === "string" && /^data:image\/(?:jpeg|png|webp);base64,/i.test(asset.dataUrl)
+      ? asset.dataUrl
+      : "";
+    if (!dataUrl) continue;
+    const id = String(key);
+    result[id] = Object.freeze({
+      id,
+      hash: String(asset.hash || id),
+      kind: "photo",
+      mime: photoMime(dataUrl),
+      dataUrl,
+      createdAt: asset.createdAt ? String(asset.createdAt) : now(),
+    });
+  }
+  return result;
+}
+
 export function dehydrateDocumentAssets(document, assetCatalog = {}) {
   const result = migrateDocument(clone(document));
   const photo = result.assets?.photo;
@@ -92,7 +112,8 @@ export function hydrateDocumentAssets(document, assetCatalog = {}) {
   const photo = result.assets?.photo;
   if (!photo?.assetId || photo.dataUrl) return result;
   const asset = assetCatalog[photo.assetId];
-  result.assets.photo = asset?.dataUrl ? { ...photo, dataUrl: asset.dataUrl } : null;
+  const dataUrl = typeof asset?.dataUrl === "string" && /^data:image\/(?:jpeg|png|webp);base64,/i.test(asset.dataUrl) ? asset.dataUrl : "";
+  result.assets.photo = dataUrl ? { ...photo, dataUrl } : null;
   return result;
 }
 
@@ -228,8 +249,13 @@ export function normalizeWorkspace(input) {
     activeDocumentId,
     documents,
     applications,
-    assets: input.assets && typeof input.assets === "object" ? clone(input.assets) : {},
-    masterHistory: Array.isArray(input.masterHistory) ? clone(input.masterHistory) : [],
+    assets: normalizeAssetCatalog(input.assets),
+    masterHistory: Array.isArray(input.masterHistory) ? input.masterHistory.map((item) => ({
+      id: String(item?.id || createId("history")),
+      name: String(item?.name || "历史版本"),
+      createdAt: item?.createdAt ? String(item.createdAt) : now(),
+      document: migrateDocument(item?.document || documents[masterDocumentId].document),
+    })) : [],
     metadata: {
       createdAt: input.metadata?.createdAt || now(),
       updatedAt: input.metadata?.updatedAt || now(),
@@ -243,19 +269,9 @@ export function normalizeWorkspace(input) {
   return workspace;
 }
 
-function stripCredentials(value) {
-  if (Array.isArray(value)) return value.map(stripCredentials);
-  if (!value || typeof value !== "object") return value;
-  const result = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (!CREDENTIAL_FIELD.test(key)) result[key] = stripCredentials(child);
-  }
-  return result;
-}
-
 export function createWorkspaceBackup(workspace) {
   const normalized = normalizeWorkspace(workspace);
-  return stripCredentials({
+  return stripSensitiveData({
     backupType: "resume-formatter-workspace",
     exportedAt: now(),
     workspace: normalized,
@@ -264,7 +280,7 @@ export function createWorkspaceBackup(workspace) {
 
 export function importWorkspaceBackup(input) {
   const source = input?.backupType === "resume-formatter-workspace" ? input.workspace : input;
-  return normalizeWorkspace(stripCredentials(source));
+  return normalizeWorkspace(stripSensitiveData(source));
 }
 
 function requirementCategory(text) {
