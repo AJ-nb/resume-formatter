@@ -849,15 +849,16 @@ function wireInspectorDrag() {
   let drag = null;
   let suppressClickUntil = 0;
 
-  const finishDrag = (event, cancelled = false) => {
+  const finishDrag = (event) => {
     if (!drag || event.pointerId !== drag.pointerId) return;
-    const shouldOpen = cancelled ? drag.wasOpen : drag.offset < drag.maxOffset / 2;
-    if (drag.moved) suppressClickUntil = performance.now() + 400;
+    const currentDrag = drag;
+    drag = null;
+    const shouldOpen = currentDrag.offset < currentDrag.maxOffset / 2;
+    if (currentDrag.moved) suppressClickUntil = performance.now() + 400;
     inspector.classList.remove("inspector-dragging");
     inspector.style.removeProperty("transform");
     setInspectorOpen(shouldOpen);
     if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-    drag = null;
   };
 
   handle.addEventListener("pointerdown", (event) => {
@@ -875,15 +876,15 @@ function wireInspectorDrag() {
     inspector.classList.add("inspector-dragging");
     handle.setPointerCapture(event.pointerId);
   });
-  handle.addEventListener("pointermove", (event) => {
+  window.addEventListener("pointermove", (event) => {
     if (!drag || event.pointerId !== drag.pointerId) return;
     const delta = event.clientY - drag.startY;
     drag.moved ||= Math.abs(delta) > 4;
     drag.offset = Math.min(drag.maxOffset, Math.max(0, (drag.wasOpen ? 0 : drag.maxOffset) + delta));
     inspector.style.transform = `translateY(${drag.offset}px)`;
   });
-  handle.addEventListener("pointerup", (event) => finishDrag(event));
-  handle.addEventListener("pointercancel", (event) => finishDrag(event, true));
+  window.addEventListener("pointerup", finishDrag);
+  window.addEventListener("pointercancel", finishDrag);
   handle.addEventListener("click", () => {
     if (performance.now() < suppressClickUntil) return;
     setInspectorOpen(!document.body.classList.contains("inspector-open"));
