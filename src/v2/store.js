@@ -40,18 +40,26 @@ export class ResumeStore {
     for (const listener of this.listeners) listener(this.document, reason);
   }
 
+  isReadOnly() {
+    return this.workspace.getActiveRecord()?.status === "frozen";
+  }
+
   replace(document, reason = "replace", recordUndo = true) {
+    if (this.isReadOnly()) return false;
     if (recordUndo) this.pushUndo(reason);
     this.document = migrateDocument(document);
     this.touch();
     this.notify(reason);
+    return true;
   }
 
   transact(reason, mutator, { recordUndo = true } = {}) {
+    if (this.isReadOnly()) return false;
     if (recordUndo) this.pushUndo(reason);
     mutator(this.document);
     this.touch();
     this.notify(reason);
+    return true;
   }
 
   pushUndo(label) {
@@ -86,7 +94,7 @@ export class ResumeStore {
   }
 
   save() {
-    if (!this.storage) return false;
+    if (!this.storage || this.isReadOnly()) return false;
     this.document.metadata.lastSavedAt = new Date().toISOString();
     this.workspace.setActiveDocument(this.document);
     this.storage.setItem(DOCUMENT_KEY, JSON.stringify(this.document));
@@ -115,7 +123,7 @@ export class ResumeStore {
   }
 
   activateDocument(documentId) {
-    this.workspace.setActiveDocument(this.document);
+    if (!this.isReadOnly()) this.workspace.setActiveDocument(this.document);
     this.document = this.workspace.activate(documentId);
     this.undoStack.length = 0;
     this.redoStack.length = 0;
@@ -125,7 +133,7 @@ export class ResumeStore {
   }
 
   createApplication(input) {
-    this.workspace.setActiveDocument(this.document);
+    if (!this.isReadOnly()) this.workspace.setActiveDocument(this.document);
     const application = this.workspace.createApplication(input);
     this.document = this.workspace.getActiveDocument();
     this.undoStack.length = 0;
@@ -133,6 +141,30 @@ export class ResumeStore {
     this.dirty = false;
     this.notify("create-application");
     return application;
+  }
+
+  syncActiveApplication(resolutions = {}) {
+    const application = this.workspace.getActiveApplication();
+    if (!application) throw new Error("当前不是岗位版本。");
+    const result = this.workspace.syncApplicationWithMaster(application.id, resolutions);
+    this.document = this.workspace.getActiveDocument();
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.dirty = false;
+    this.notify("sync-master");
+    return result;
+  }
+
+  copyActiveApplication() {
+    const application = this.workspace.getActiveApplication();
+    if (!application) throw new Error("当前不是岗位版本。");
+    const next = this.workspace.copyApplication(application.id);
+    this.document = this.workspace.getActiveDocument();
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.dirty = false;
+    this.notify("copy-application");
+    return next;
   }
 
   replaceWorkspace(input) {

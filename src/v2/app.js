@@ -3,6 +3,7 @@ import {
   AI_PROVIDERS,
   REWRITE_MODES,
   compareWithJD,
+  createAIRequestDisclosure,
   createSelectionReference,
   draftBulletFromEvidence,
   listAvailableModels,
@@ -14,7 +15,7 @@ import {
   selectionIsCurrent,
   testConnection,
 } from "./ai.js";
-import { CHECK_SEVERITIES, evaluateExportReadiness, runResumeChecks } from "./checks.js";
+import { CHECK_SEVERITIES, buildQuickScan, evaluateExportReadiness, runResumeChecks } from "./checks.js";
 import {
   SECTION_DEFINITIONS,
   TEMPLATE_CATEGORIES,
@@ -23,6 +24,7 @@ import {
   createEmptyEntry,
   createEmptySection,
   createId,
+  documentToPlainText,
   getTemplate,
   migrateDocument,
   resolveLayout,
@@ -193,7 +195,7 @@ function renderWorkspaceDocumentList() {
   const workspace = store.workspace.workspace;
   target.replaceChildren();
   const master = workspace.documents[workspace.masterDocumentId];
-  const appendRecord = (record, label, meta, status = "") => {
+  const appendRecord = (record, label, meta, status = "", statusLabel = "") => {
     const button = node("button", `workspace-document${record.id === workspace.activeDocumentId ? " active" : ""}`);
     button.type = "button";
     button.dataset.documentId = record.id;
@@ -201,13 +203,19 @@ function renderWorkspaceDocumentList() {
     const copy = node("span", "workspace-document-copy");
     copy.append(node("strong", "", label), node("small", "", meta));
     button.append(rail, copy);
-    if (status) button.append(node("span", `document-status ${status}`, status === "applied" ? "已投递" : "草稿"));
+    if (status) button.append(node("span", `document-status ${status}`, statusLabel || (status === "applied" ? "已投递" : "草稿")));
     target.append(button);
   };
   appendRecord(master, master.title || "简历母版", "所有岗位版本的来源");
   for (const application of workspace.applications) {
     const record = workspace.documents[application.documentId];
-    if (record) appendRecord(record, [application.company, application.role].filter(Boolean).join(" · ") || record.title, new Date(application.updatedAt).toLocaleDateString("zh-CN"), application.status);
+    if (record) {
+      let masterChanges = 0;
+      try { masterChanges = store.workspace.previewMasterSync(application.id).changeCount; } catch { /* keep the rail usable */ }
+      const status = application.status === "applied" ? "applied" : masterChanges ? "update" : application.status;
+      const statusLabel = application.status === "applied" ? "已投递" : masterChanges ? "母版有更新" : "草稿";
+      appendRecord(record, [application.company, application.role].filter(Boolean).join(" · ") || record.title, new Date(application.updatedAt).toLocaleDateString("zh-CN"), status, statusLabel);
+    }
   }
 }
 
@@ -249,6 +257,26 @@ function renderJobPanel() {
   $("#job-jd").value = application.jdText;
   $("#job-jd-count").textContent = `${application.jdText.length.toLocaleString("zh-CN")} 字`;
   $("#job-status").textContent = application.status === "applied" ? "已投递" : application.status === "ready" ? "可投递" : "草稿";
+  const readOnly = store.isReadOnly();
+  for (const id of ["job-company", "job-role", "job-language", "job-source-note", "job-jd"]) $(`#${id}`).disabled = readOnly;
+  const syncPlan = store.workspace.previewMasterSync(application.id);
+  const syncBadge = $("#master-sync-badge");
+  syncBadge.textContent = syncPlan.changeCount ? `${syncPlan.changeCount} 项更新` : "已同步";
+  syncBadge.className = `connection-badge ${syncPlan.changeCount ? "warning" : "connected"}`;
+  $("#btn-compare-master").disabled = syncPlan.changeCount === 0;
+  $("#btn-sync-master").disabled = readOnly || syncPlan.changeCount === 0;
+  $("#btn-sync-master").hidden = readOnly;
+  $("#btn-copy-application").hidden = !readOnly;
+  const history = $("#export-history-list");
+  history.replaceChildren();
+  $("#export-history-count").textContent = `${application.exportRecords.length} 次`;
+  if (!application.exportRecords.length) history.append(node("p", "panel-empty", "尚无导出记录"));
+  for (const record of application.exportRecords.slice(0, 8)) {
+    const item = node("div", "export-history-item");
+    const type = record.type === "pdf" ? "投递 PDF" : record.type === "html" ? "独立 HTML" : record.type === "markdown" ? "Markdown" : "简历 JSON";
+    item.append(node("strong", "", type), node("span", "", new Date(record.createdAt).toLocaleString("zh-CN")));
+    history.append(item);
+  }
 
   const evidenceList = $("#evidence-list");
   evidenceList.replaceChildren();
@@ -341,6 +369,142 @@ function renderChecks(doc) {
   }
 }
 
+function syncValueLabel(value) {
+  if (value === undefined) return "删除";
+  if (value == null || value === "") return "空值";
+  if (typeof value === "object") {
+    const label = value.title || value.name || value.role || value.text;
+    return label ? String(label).slice(0, 80) : "结构内容";
+  }
+  return String(value).slice(0, 120);
+}
+
+function openMasterComparison(syncMode = false) {
+  const application = store.workspace.getActiveApplication();
+  if (!application) return;
+  const plan = store.workspace.previewMasterSync(application.id);
+  const modal = openModal(syncMode ? "同步母版更新" : "岗位版本与母版", { wide: true });
+  const summary = node("div", "sync-summary");
+  summary.append(
+    node("div", "", `${plan.autoUpdates.length}\n可自动同步`),
+    node("div", "", `${plan.conflicts.length}\n需要选择`),
+  );
+  modal.body.append(summary);
+  if (!plan.changeCount) modal.body.append(node("div", "readiness-clear", "当前岗位版本已基于最新母版。"));
+  if (plan.autoUpdates.length) {
+    const section = node("section", "sync-section");
+    section.append(node("h3", "", "未在岗位版修改，可自动同步"));
+    for (const change of plan.autoUpdates) {
+      const row = node("div", "sync-row auto");
+      row.append(node("strong", "", change.label), node("span", "", syncValueLabel(change.masterValue)));
+      section.append(row);
+    }
+    modal.body.append(section);
+  }
+  const resolutions = {};
+  const conflictControls = [];
+  if (plan.conflicts.length) {
+    const section = node("section", "sync-section");
+    section.append(node("h3", "", "岗位版与母版都已修改"));
+    for (const change of plan.conflicts) {
+      const row = node("div", "sync-row conflict");
+      row.append(node("strong", "", change.label));
+      const comparison = node("div", "sync-comparison");
+      comparison.append(node("span", "", `岗位版：${syncValueLabel(change.jobValue)}`), node("span", "", `母版：${syncValueLabel(change.masterValue)}`));
+      row.append(comparison);
+      if (syncMode) {
+        const select = node("select", "sync-resolution");
+        select.setAttribute("aria-label", `冲突处理：${change.label}`);
+        for (const [value, label] of [["", "选择处理方式"], ["job", "保留岗位版"], ["master", "使用母版"]]) {
+          const option = node("option", "", label); option.value = value; select.append(option);
+        }
+        select.addEventListener("change", () => { resolutions[change.id] = select.value; });
+        row.append(select);
+        conflictControls.push(select);
+      }
+      section.append(row);
+    }
+    modal.body.append(section);
+  }
+  modal.footer.append(modalButton("关闭", "", modal.close));
+  if (syncMode && plan.changeCount) {
+    const apply = modalButton(`同步 ${plan.changeCount} 项`, "primary", () => {
+      try {
+        for (const select of conflictControls) if (!select.value) return;
+        const result = store.syncActiveApplication(resolutions);
+        modal.close();
+        toast(`已同步 ${result.appliedChanges.length} 项，保留 ${result.keptChanges.length} 项岗位定制。`, "success");
+      } catch (error) { toast(error.message, "error"); }
+    });
+    if (conflictControls.length) {
+      apply.disabled = true;
+      for (const select of conflictControls) select.addEventListener("change", () => { apply.disabled = conflictControls.some((item) => !item.value); });
+    }
+    modal.footer.append(apply);
+  }
+}
+
+function copyActiveApplication() {
+  try {
+    store.copyActiveApplication();
+    showInspectorTab("job");
+    setInspectorOpen(true);
+    toast("已创建可编辑副本，原投递快照保持不变。", "success");
+  } catch (error) { toast(error.message, "error"); }
+}
+
+function quickScanRow(label, value, path = "") {
+  const row = node(path ? "button" : "div", `quick-scan-row${path ? " actionable" : ""}`);
+  if (path) { row.type = "button"; row.dataset.quickScanPath = path; }
+  row.append(node("span", "", label), node("strong", "", value || "未填写"));
+  return row;
+}
+
+function openQuickScan() {
+  const scan = buildQuickScan(store.document, store.workspace.getActiveApplication() || {});
+  const modal = openModal("快速扫描", { wide: true });
+  const identity = node("div", "quick-scan-identity");
+  identity.append(node("h3", "", scan.name || "未填写姓名"), node("p", "", scan.targetRole || "未填写目标岗位"), node("span", "", scan.contact.join(" · ") || "未填写联系方式"));
+  modal.body.append(identity);
+  const grid = node("div", "quick-scan-grid");
+  const order = node("section", "quick-scan-section");
+  order.append(node("h3", "", "首屏阅读顺序"));
+  scan.readingOrder.forEach((item, index) => order.append(quickScanRow(String(index + 1).padStart(2, "0"), item.label, item.path)));
+  const outcomes = node("section", "quick-scan-section");
+  outcomes.append(node("h3", "", "前三条成果"));
+  if (!scan.outcomes.length) outcomes.append(node("p", "panel-empty", "尚无可扫描的 Bullet"));
+  scan.outcomes.forEach((item, index) => outcomes.append(quickScanRow(String(index + 1).padStart(2, "0"), item.text, item.path)));
+  grid.append(order, outcomes);
+  modal.body.append(grid);
+  const metrics = node("section", "quick-scan-section metrics");
+  metrics.append(node("h3", "", "量化信息"));
+  if (!scan.quantified.length) metrics.append(node("p", "panel-empty", "未识别到明确数字"));
+  for (const item of scan.quantified) metrics.append(quickScanRow(item.value, item.text, item.path));
+  modal.body.append(metrics);
+  modal.body.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-quick-scan-path]");
+    if (!button) return;
+    closeModal();
+    const target = $(`[data-edit-path="${button.dataset.quickScanPath}"]`) || $(`[data-section-id="${button.dataset.quickScanPath.split(".")[1] || ""}"]`);
+    target?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+  });
+  modal.footer.append(modalButton("关闭", "primary", modal.close));
+}
+
+function applyReadOnlyState() {
+  const readOnly = store.isReadOnly();
+  document.body.classList.toggle("read-only-document", readOnly);
+  $("#readonly-status").hidden = !readOnly;
+  for (const item of $$("#resume-paper [data-edit-path]")) item.contentEditable = readOnly ? "false" : "plaintext-only";
+  for (const item of $$("#resume-paper button[data-action], #mobile-editor input, #mobile-editor textarea, #mobile-editor select")) item.disabled = readOnly;
+  for (const id of ["btn-import", "btn-save", "btn-add-section", "btn-save-version", "btn-photo", "photo-toggle", "font-size", "line-height", "section-gap", "btn-auto-fit", "btn-analyze-jd", "btn-jd-compare", "btn-add-evidence"]) {
+    const item = $(`#${id}`);
+    if (item) item.disabled = readOnly;
+  }
+  for (const item of $$("[data-template-id], [data-recommended-template-id], [data-paper], [data-requirement-id], [data-evidence-id]")) item.disabled = readOnly;
+  if (readOnly) $("#selection-toolbar").hidden = true;
+}
+
 function syncControls(doc) {
   const layout = resolveLayout(doc);
   const values = {
@@ -357,12 +521,13 @@ function syncControls(doc) {
   $("#photo-toggle").disabled = !layout.template.supportsPhoto;
   for (const button of $$('[data-paper]')) button.classList.toggle("active", button.dataset.paper === layout.paper);
   $("#save-status").textContent = store.dirty ? "有未保存更改" : "已保存在本机";
-  $("#btn-undo").disabled = store.undoStack.length === 0;
-  $("#btn-redo").disabled = store.redoStack.length === 0;
+  $("#btn-undo").disabled = store.isReadOnly() || store.undoStack.length === 0;
+  $("#btn-redo").disabled = store.isReadOnly() || store.redoStack.length === 0;
   const connected = aiConfig.testStatus === "passed";
   const badge = $("#ai-status-badge");
   badge.textContent = connected ? `${AI_PROVIDERS[aiConfig.provider].name} 已连接` : "未配置";
   badge.classList.toggle("connected", connected);
+  applyReadOnlyState();
 }
 
 function scheduleDiagnostics() {
@@ -395,6 +560,7 @@ function renderAll(doc = store.document) {
 }
 
 function updatePath(path, value, reason = "编辑文字") {
+  if (store.isReadOnly()) return toast("已投递版本是只读快照，请复制后继续修改。", "error");
   if (String(getByPath(store.document, path) ?? "") === value) return;
   store.transact(reason, (doc) => setByPath(doc, path, value));
 }
@@ -421,6 +587,7 @@ function findEntry(section, entryId) { return section?.entries.find((item) => it
 function handlePaperAction(event) {
   const action = event.target.closest("[data-action]");
   if (!action) return;
+  if (store.isReadOnly()) return toast("已投递版本是只读快照，请复制后继续修改。", "error");
   const { sectionId, entryId, bulletId } = action.dataset;
   if (action.dataset.action === "photo-upload") return openPhotoDialog();
   if (action.dataset.action === "add-entry") {
@@ -460,7 +627,7 @@ function selectionOffsets(target, range) {
 async function captureSelection() {
   const selection = window.getSelection();
   const toolbar = $("#selection-toolbar");
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+  if (store.isReadOnly() || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
     toolbar.hidden = true;
     return;
   }
@@ -494,6 +661,23 @@ function loadingModal(title) {
   row.append(node("div", "spinner"), node("span", "", "正在等待提供商返回..."));
   modal.body.append(row);
   return modal;
+}
+
+function openAIRequestPreflight(title, textType, content, run) {
+  const disclosure = createAIRequestDisclosure(aiConfig, textType, content);
+  const modal = openModal(title);
+  const details = node("dl", "ai-preflight");
+  for (const [label, value] of [
+    ["提供商", disclosure.providerName],
+    ["模型", disclosure.model || "未填写"],
+    ["文本类型", disclosure.textType],
+    ["文本字符", disclosure.characterCount.toLocaleString("zh-CN")],
+  ]) details.append(node("dt", "", label), node("dd", "", value));
+  modal.body.append(details, node("div", "risk-notice", "确认后才会把上述文本发送给所选提供商；本地检查与关键词匹配不需要联网。"));
+  modal.footer.append(modalButton("取消", "", modal.close), modalButton("确认发送", "primary", () => {
+    modal.close();
+    run();
+  }));
 }
 
 async function handleRewrite(mode) {
@@ -561,6 +745,8 @@ function openAISettings() {
     const option = node("option", "", item.name); option.value = id; provider.append(option);
   }
   const baseUrl = node("input"); baseUrl.type = "url";
+  const advanced = node("details", "advanced-settings");
+  const advancedSummary = node("summary", "", "高级设置");
   const model = node("input"); model.placeholder = "输入模型 ID"; model.autocomplete = "off";
   const modelList = node("datalist"); modelList.id = "ai-model-options"; model.setAttribute("list", modelList.id);
   const modelStatus = node("p", "field-help"); modelStatus.hidden = true;
@@ -597,17 +783,18 @@ function openAISettings() {
     modelList.replaceChildren();
     modelStatus.hidden = true;
     modelsButton.hidden = !AI_PROVIDERS[config.provider].supportsModelDiscovery;
+    advanced.open = config.provider === "custom";
   };
   fill(aiConfig);
   provider.addEventListener("change", () => fill(normalizeAIConfig({ provider: provider.value, remember: remember.checked })));
   grid.append(
     formField("提供商", provider),
     formField("模型", model),
-    formField("Base URL", baseUrl, true),
     formField("API Key", apiKey, true),
     formField("凭据保存", rememberLabel, true),
   );
-  modal.body.append(grid, modelList, modelStatus, node("div", "risk-notice", "浏览器直连意味着密钥会存在于当前页面运行环境。默认仅写入 sessionStorage，关闭标签页后失效；选择“记住到本机”会以明文写入 localStorage。密钥不会进入简历、HTML、Markdown 或 JSON 导出。"));
+  advanced.append(advancedSummary, formField("Base URL", baseUrl, true));
+  modal.body.append(grid, advanced, modelList, modelStatus, node("div", "risk-notice", "浏览器直连意味着密钥会存在于当前页面运行环境。默认仅写入 sessionStorage，关闭标签页后失效；选择“记住到本机”会以明文写入 localStorage。密钥不会进入简历、HTML、Markdown 或 JSON 导出。"));
   modal.footer.append(modelsButton);
   modal.footer.append(modalButton("取消", "", modal.close));
   const testButton = modalButton("测试连接并保存", "primary", async () => {
@@ -628,35 +815,42 @@ function openAISettings() {
   modal.footer.append(testButton);
 }
 
-async function handleFullReview() {
-  const wait = loadingModal("全文审阅");
-  try {
-    const result = await reviewResume(aiConfig, store.document);
-    wait.close();
-    showInspectorTab("checks");
-    const target = $("#ai-results");
-    target.replaceChildren();
-    if (!result.issues.length) target.append(node("p", "panel-empty", "没有返回具体问题。"));
-    for (const issue of result.issues) {
-      const item = node("div", "ai-result-item");
-      const meta = node("div", "ai-result-meta");
-      meta.append(node("span", "", issue.severity), node("span", "", issue.fieldPath || "未定位"));
-      item.append(meta, node("strong", "", issue.title), node("p", "", `${issue.detail} ${issue.suggestion}`.trim()));
-      target.append(item);
-    }
-    document.body.classList.add("inspector-open");
-  } catch (error) { wait.close(); toast(error.message, "error"); }
+function handleFullReview() {
+  const resumeText = documentToPlainText(store.document);
+  openAIRequestPreflight("发送全文审阅", "简历全文", resumeText, async () => {
+    const wait = loadingModal("全文审阅");
+    try {
+      const result = await reviewResume(aiConfig, store.document);
+      wait.close();
+      showInspectorTab("checks");
+      const target = $("#ai-results");
+      target.replaceChildren();
+      if (!result.issues.length) target.append(node("p", "panel-empty", "没有返回具体问题。"));
+      for (const issue of result.issues) {
+        const item = node("div", "ai-result-item");
+        const meta = node("div", "ai-result-meta");
+        meta.append(node("span", "", issue.severity), node("span", "", issue.fieldPath || "未定位"));
+        item.append(meta, node("strong", "", issue.title), node("p", "", `${issue.detail} ${issue.suggestion}`.trim()));
+        target.append(item);
+      }
+      document.body.classList.add("inspector-open");
+    } catch (error) { wait.close(); toast(error.message, "error"); }
+  });
 }
 
-async function openJDCompare() {
+function openJDCompare() {
   const application = store.workspace.getActiveApplication();
   if (!application?.jdText.trim()) return toast("请先在岗位面板填写 JD。", "error");
-  const wait = loadingModal("AI 补充对照");
-  try {
-    const result = await compareWithJD(aiConfig, store.document, application.jdText);
-    wait.close();
-    renderJDResults(result);
-  } catch (error) { wait.close(); toast(error.message, "error"); }
+  const resumeText = documentToPlainText(store.document);
+  const jdText = application.jdText.slice(0, 20_000);
+  openAIRequestPreflight("发送岗位对照", "简历全文与岗位描述", [resumeText, jdText], async () => {
+    const wait = loadingModal("AI 补充对照");
+    try {
+      const result = await compareWithJD(aiConfig, store.document, application.jdText);
+      wait.close();
+      renderJDResults(result);
+    } catch (error) { wait.close(); toast(error.message, "error"); }
+  });
 }
 
 function renderJDResults(result) {
@@ -966,8 +1160,19 @@ function safeFileName(extension) {
   return `${base}.${extension}`;
 }
 
+function recordDocumentExport(type, details = {}) {
+  const record = store.workspace.recordExport(type, details);
+  if (record) {
+    renderWorkspaceDocumentList();
+    renderJobPanel();
+    refreshIcons();
+  }
+  return record;
+}
+
 function exportJson() {
   download(`${JSON.stringify(store.document, null, 2)}\n`, safeFileName("json"), "application/json;charset=utf-8");
+  recordDocumentExport("json");
 }
 
 function exportWorkspace() {
@@ -1007,6 +1212,7 @@ async function importWorkspaceFile(file) {
 
 function exportMarkdown() {
   download(serializeMarkdown(store.document), safeFileName("md"), "text/markdown;charset=utf-8");
+  recordDocumentExport("markdown");
 }
 
 function exportHtml() {
@@ -1018,6 +1224,7 @@ function exportHtml() {
   cloneDoc.querySelector("#workspace-document-list")?.replaceChildren();
   cloneDoc.querySelector("#evidence-list")?.replaceChildren();
   cloneDoc.querySelector("#requirement-list")?.replaceChildren();
+  cloneDoc.querySelector("#export-history-list")?.replaceChildren();
   cloneDoc.querySelector("#job-workspace")?.setAttribute("hidden", "");
   for (const id of ["job-company", "job-role", "job-language", "job-source-note", "job-jd"]) {
     const item = cloneDoc.querySelector(`#${id}`);
@@ -1028,6 +1235,7 @@ function exportHtml() {
   embedded.textContent = JSON.stringify(store.document).replace(/<\/script/gi, "<\\/script");
   const html = `<!doctype html>\n${cloneDoc.outerHTML}`;
   download(html, safeFileName("html"), "text/html;charset=utf-8");
+  recordDocumentExport("html", { templateId: store.document.layout.templateId, paper: store.document.layout.paper });
 }
 
 function openExportGate() {
@@ -1058,8 +1266,10 @@ function openExportGate() {
     if (!readiness.ready) return;
     store.workspace.setActiveDocument(store.document);
     store.workspace.recordExport("pdf", { templateId: store.document.layout.templateId, paper: store.document.layout.paper, confirmedWarnings: confirmations });
+    store.dirty = false;
     modal.close();
-    window.print();
+    renderAll();
+    setTimeout(() => window.print(), 0);
   });
   const update = () => {
     const confirmations = [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
@@ -1166,12 +1376,17 @@ function wireStaticEvents() {
   $("#btn-export-workspace").addEventListener("click", exportWorkspace);
   $("#btn-print").addEventListener("click", openExportGate);
   $("#btn-ai-settings").addEventListener("click", openAISettings);
+  $("#btn-quick-scan").addEventListener("click", openQuickScan);
   $("#btn-review-resume").addEventListener("click", handleFullReview);
   $("#btn-jd-compare").addEventListener("click", openJDCompare);
   $("#btn-new-application").addEventListener("click", openCreateApplication);
   $("#btn-create-job-empty").addEventListener("click", openCreateApplication);
   $("#btn-add-evidence").addEventListener("click", openEvidenceDialog);
   $("#btn-analyze-jd").addEventListener("click", analyzeActiveJD);
+  $("#btn-compare-master").addEventListener("click", () => openMasterComparison(false));
+  $("#btn-sync-master").addEventListener("click", () => openMasterComparison(true));
+  $("#btn-copy-application").addEventListener("click", copyActiveApplication);
+  $("#btn-copy-snapshot").addEventListener("click", copyActiveApplication);
   $("#btn-all-templates").addEventListener("click", () => showSidebarTab("templates"));
   $("#btn-add-section").addEventListener("click", openAddSection);
   $("#btn-photo").addEventListener("click", openPhotoDialog);

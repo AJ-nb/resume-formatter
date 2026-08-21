@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AI_PROVIDERS,
   compareFacts,
+  createAIRequestDisclosure,
   createSelectionReference,
   draftBulletFromEvidence,
   listAvailableModels,
@@ -25,6 +26,19 @@ test("选区哈希检测陈旧内容", async () => {
   assert.equal(reference.originalText, "需要改写的文");
   assert.equal(await selectionIsCurrent(reference, "一段需要改写的文字"), true);
   assert.equal(await selectionIsCurrent(reference, "一段已经改写的文字"), false);
+});
+
+test("大范围 AI 请求披露提供商、模型、文本类型和字符数且不发出网络请求", () => {
+  let calls = 0;
+  const disclosure = createAIRequestDisclosure({ provider: "biyuan", model: "gpt-example", apiKey: "test-key" }, "简历全文与岗位描述", ["虚构简历", "虚构岗位"]);
+  assert.equal(calls, 0);
+  assert.deepEqual(disclosure, {
+    provider: "biyuan",
+    providerName: "彼源 AI",
+    model: "gpt-example",
+    textType: "简历全文与岗位描述",
+    characterCount: 9,
+  });
 });
 
 test("数字、日期、比例和专有缩写变化触发事实保护", () => {

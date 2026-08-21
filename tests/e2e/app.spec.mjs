@@ -114,10 +114,9 @@ test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销"
   const rememberBox = await rememberCheckbox.boundingBox();
   expect(rememberBox.width).toBeLessThanOrEqual(20);
   expect(rememberBox.height).toBeLessThanOrEqual(20);
-  const fields = page.locator(".modal input");
-  await fields.nth(0).fill("example-model");
-  await fields.nth(1).fill("https://mock.example/v1");
-  await fields.nth(2).fill("test-key");
+  await page.getByLabel("模型", { exact: true }).fill("example-model");
+  await page.getByLabel("Base URL", { exact: true }).fill("https://mock.example/v1");
+  await page.getByLabel("API Key", { exact: true }).fill("test-key");
   await page.getByRole("button", { name: "测试连接并保存" }).click();
   await expect(page.locator("#ai-status-badge")).toContainText("已连接");
 
@@ -171,19 +170,18 @@ test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => 
   });
 
   await page.locator("#btn-ai-settings").click();
-  const fields = page.locator(".modal input");
-  await fields.nth(2).fill("other-provider-key");
+  await page.getByLabel("API Key", { exact: true }).fill("other-provider-key");
   await page.locator(".modal select").selectOption("biyuan");
-  await expect(fields.nth(1)).toHaveValue("https://api.biyuan.ai/v1");
-  await expect(fields.nth(0)).toHaveValue("");
-  await expect(fields.nth(2)).toHaveValue("");
-  await fields.nth(2).fill("test-key");
+  await expect(page.getByLabel("Base URL", { exact: true })).toHaveValue("https://api.biyuan.ai/v1");
+  await expect(page.getByLabel("模型", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await page.getByLabel("API Key", { exact: true }).fill("test-key");
   await page.getByRole("button", { name: "读取可用模型" }).click();
   await expect(page.locator(".field-help")).toContainText("已读取 2 个");
   expect(modelsRequest.headers().authorization).toBe("Bearer test-key");
   expect(modelsRequest.postData()).toBeNull();
 
-  await fields.nth(0).fill("gpt-example");
+  await page.getByLabel("模型", { exact: true }).fill("gpt-example");
   await page.getByRole("button", { name: "测试连接并保存" }).click();
   await expect(page.locator("#ai-status-badge")).toHaveText("彼源 AI 已连接");
   expect(chatRequests[0].headers().authorization).toBe("Bearer test-key");
@@ -234,6 +232,85 @@ test("母版与岗位版本独立编辑，JD 与证据形成本地闭环", async
   await expect(page.locator(".evidence-item")).toContainText("重构订单流程并组织用户验证");
 });
 
+test("岗位版本按三方差异同步母版并逐项处理冲突", async ({ page }) => {
+  await createJobVersion(page, "示例科技", "产品经理");
+  const summary = page.locator("#resume-paper [data-edit-path='summary']");
+  await summary.fill("岗位定制摘要");
+  await summary.blur();
+
+  await page.locator("#workspace-document-list .workspace-document").first().click();
+  const masterSummary = page.locator("#resume-paper [data-edit-path='summary']");
+  await masterSummary.fill("母版更新摘要");
+  await masterSummary.blur();
+  const masterPhone = page.locator("#resume-paper [data-edit-path='profile.phone']");
+  await masterPhone.fill("139-0000-0000");
+  await masterPhone.blur();
+
+  await page.getByRole("button", { name: /示例科技 · 产品经理/ }).click();
+  await page.getByRole("tab", { name: "岗位" }).click();
+  await expect(page.locator("#master-sync-badge")).toHaveText("2 项更新");
+  await page.locator("#btn-sync-master").click();
+  await expect(page.getByRole("heading", { name: "同步母版更新" })).toBeVisible();
+  await expect(page.locator(".sync-row.auto")).toContainText("电话");
+  await page.getByLabel(/冲突处理：个人摘要/).selectOption("job");
+  await page.getByRole("button", { name: "同步 2 项" }).click();
+  await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveText("岗位定制摘要");
+  await expect(page.locator("#resume-paper [data-edit-path='profile.phone']")).toHaveText("139-0000-0000");
+  await expect(page.locator("#master-sync-badge")).toHaveText("已同步");
+});
+
+test("快速扫描可解释首屏信号且大范围 AI 请求先披露发送范围", async ({ page }) => {
+  const requests = [];
+  await page.route("https://review.example/v1/chat/completions", async (route) => {
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    const isTest = body.messages?.some((message) => message.content.includes('"ok"'));
+    const content = isTest
+      ? '{"ok":true}'
+      : '{"issues":[{"severity":"medium","fieldPath":"summary","title":"摘要可更聚焦","detail":"目标岗位不够明确","suggestion":"补充岗位方向"}]}';
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content } }] }) });
+  });
+
+  await page.getByRole("tab", { name: "检查" }).click();
+  await page.locator("#btn-quick-scan").click();
+  await expect(page.getByRole("heading", { name: "快速扫描" })).toBeVisible();
+  await expect(page.locator(".quick-scan-identity")).toContainText("林知远");
+  await expect(page.locator(".quick-scan-section.metrics")).toContainText("32%");
+  await page.locator(".modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
+
+  await page.locator("#btn-ai-settings").click();
+  await page.locator(".modal select").selectOption("custom");
+  await page.getByLabel("模型", { exact: true }).fill("review-model");
+  await page.getByLabel("Base URL", { exact: true }).fill("https://review.example/v1");
+  await page.getByLabel("API Key", { exact: true }).fill("test-key");
+  await page.getByRole("button", { name: "测试连接并保存" }).click();
+  await page.locator("#btn-review-resume").click();
+  await expect(page.getByRole("heading", { name: "发送全文审阅" })).toBeVisible();
+  await expect(page.locator(".ai-preflight")).toContainText("简历全文");
+  await expect(page.locator(".ai-preflight")).toContainText("review-model");
+  expect(requests).toHaveLength(1);
+  await page.getByRole("button", { name: "确认发送" }).click();
+  await expect(page.locator("#ai-results")).toContainText("摘要可更聚焦");
+  expect(requests).toHaveLength(2);
+});
+
+test("投递后冻结只读快照并可复制为新版本继续编辑", async ({ page }) => {
+  await createJobVersion(page, "示例公司", "工程师");
+  await page.evaluate(() => { window.print = () => {}; });
+  await page.locator("#btn-export-menu").click();
+  await page.locator("#btn-print").click();
+  const warnings = page.locator(".readiness-item.warning input");
+  for (let index = 0; index < await warnings.count(); index += 1) await warnings.nth(index).check();
+  await page.getByRole("button", { name: "打开打印对话框" }).click();
+  await expect(page.locator("#readonly-status")).toBeVisible();
+  await expect(page.locator("#btn-save")).toBeDisabled();
+  await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveAttribute("contenteditable", "false");
+  await page.locator("#btn-copy-snapshot").click();
+  await expect(page.locator("#readonly-status")).toBeHidden();
+  await expect(page.locator("#workspace-document-list .workspace-document")).toHaveCount(3);
+  await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveAttribute("contenteditable", "plaintext-only");
+});
+
 test("证据 AI 仅发送选定证据，建议可应用并原子撤销", async ({ page }) => {
   const requests = [];
   await page.route("https://evidence.example/v1/chat/completions", async (route) => {
@@ -257,10 +334,9 @@ test("证据 AI 仅发送选定证据，建议可应用并原子撤销", async (
 
   await page.locator("#btn-ai-settings").click();
   await page.locator(".modal select").first().selectOption("custom");
-  const fields = page.locator(".modal input");
-  await fields.nth(0).fill("evidence-model");
-  await fields.nth(1).fill("https://evidence.example/v1");
-  await fields.nth(2).fill("test-key");
+  await page.getByLabel("模型", { exact: true }).fill("evidence-model");
+  await page.getByLabel("Base URL", { exact: true }).fill("https://evidence.example/v1");
+  await page.getByLabel("API Key", { exact: true }).fill("test-key");
   await page.getByRole("button", { name: "测试连接并保存" }).click();
 
   const before = await page.locator("#resume-paper [data-edit-path='summary']").textContent();
