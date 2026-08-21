@@ -1,4 +1,5 @@
 import { documentToPlainText } from "./contracts.js";
+import { redactSensitiveText } from "./privacy.js";
 import { validateEvidence } from "./workspace.js";
 
 export const AI_PROVIDERS = Object.freeze({
@@ -26,8 +27,10 @@ export const REWRITE_MODES = Object.freeze({
   impact: "结果导向",
 });
 
-const SESSION_KEY = "resume-formatter:ai-session-v2";
-const LOCAL_KEY = "resume-formatter:ai-local-v2";
+const PREFERENCES_KEY = "resume-formatter:ai-preferences-v3";
+const CREDENTIAL_SESSION_KEY = "resume-formatter:ai-credential-session-v3";
+const LEGACY_SESSION_KEY = "resume-formatter:ai-session-v2";
+const LEGACY_LOCAL_KEY = "resume-formatter:ai-local-v2";
 
 const rewriteSchema = {
   type: "object",
@@ -97,12 +100,33 @@ const evidenceDraftSchema = {
 export function normalizeAIConfig(input = {}) {
   const provider = AI_PROVIDERS[input.provider] ? input.provider : "openai";
   const defaults = AI_PROVIDERS[provider];
+  const requestedBaseUrl = String(provider === "custom" ? input.baseUrl || "" : defaults.baseUrl)
+    .trim()
+    .replace(/^http:\/\/\[::1\](?=[:/]|$)/i, "http://localhost")
+    .replace(/\/+$/, "");
   return {
     provider,
-    baseUrl: String(input.baseUrl || defaults.baseUrl).replace(/\/+$/, ""),
+    baseUrl: requestedBaseUrl,
     model: String(input.model || defaults.model),
     apiKey: String(input.apiKey || ""),
-    remember: Boolean(input.remember),
+    testStatus: input.testStatus === "passed" ? "passed" : "untested",
+    testedFingerprint: String(input.testedFingerprint || ""),
+    testedAt: input.testedAt || null,
+  };
+}
+
+export function createAIProviderPreferences(input = {}) {
+  const value = normalizeAIConfig(input);
+  return {
+    provider: value.provider,
+    baseUrl: value.baseUrl,
+    model: value.model,
+  };
+}
+
+export function createAICredentialSession(input = {}) {
+  return {
+    apiKey: String(input.apiKey || ""),
     testStatus: input.testStatus === "passed" ? "passed" : "untested",
     testedFingerprint: String(input.testedFingerprint || ""),
     testedAt: input.testedAt || null,
@@ -117,33 +141,85 @@ export function redactConfig(config) {
 export function createAIRequestDisclosure(config, textType, content) {
   const value = normalizeAIConfig(config);
   const text = Array.isArray(content) ? content.map((item) => String(item || "")).join("\n") : String(content || "");
+  let destinationHost = "未配置";
+  let transportSecure = false;
+  try {
+    const parsed = new URL(value.baseUrl);
+    destinationHost = parsed.host;
+    transportSecure = parsed.protocol === "https:";
+  } catch { /* validation presents the actionable error */ }
   return {
     provider: value.provider,
     providerName: AI_PROVIDERS[value.provider].name,
     model: value.model,
     textType: String(textType || "文本"),
     characterCount: text.length,
+    destinationHost,
+    transportSecure,
   };
 }
 
 export function loadAIConfig(session = globalThis.sessionStorage, local = globalThis.localStorage) {
-  for (const storage of [session, local]) {
+  let preferences = {};
+  let credential = {};
+  try {
+    const current = local?.getItem(PREFERENCES_KEY);
+    const legacy = local?.getItem(LEGACY_LOCAL_KEY);
     try {
-      const value = storage?.getItem(storage === session ? SESSION_KEY : LOCAL_KEY);
-      if (value) return normalizeAIConfig(JSON.parse(value));
-    } catch { /* storage can be blocked under file:// */ }
-  }
-  return normalizeAIConfig();
+      const stored = current ? JSON.parse(current) : legacy ? JSON.parse(legacy) : null;
+      if (stored) {
+        preferences = createAIProviderPreferences(stored);
+        local?.setItem(PREFERENCES_KEY, JSON.stringify(preferences));
+      }
+    } catch {
+      local?.removeItem(PREFERENCES_KEY);
+    }
+    local?.removeItem(LEGACY_LOCAL_KEY);
+  } catch { /* storage can be blocked under file:// */ }
+  try {
+    const current = session?.getItem(CREDENTIAL_SESSION_KEY);
+    const legacy = session?.getItem(LEGACY_SESSION_KEY);
+    try {
+      const stored = current ? JSON.parse(current) : legacy ? JSON.parse(legacy) : null;
+      if (stored) {
+        credential = createAICredentialSession(stored);
+        session?.setItem(CREDENTIAL_SESSION_KEY, JSON.stringify(credential));
+      }
+    } catch {
+      session?.removeItem(CREDENTIAL_SESSION_KEY);
+    }
+    session?.removeItem(LEGACY_SESSION_KEY);
+  } catch { /* storage can be blocked under file:// */ }
+  return normalizeAIConfig({ ...preferences, ...credential });
 }
 
 export function saveAIConfig(config, session = globalThis.sessionStorage, local = globalThis.localStorage) {
   const value = normalizeAIConfig(config);
-  try { session?.setItem(SESSION_KEY, JSON.stringify(value)); } catch { /* ignored */ }
   try {
-    if (value.remember) local?.setItem(LOCAL_KEY, JSON.stringify(value));
-    else local?.removeItem(LOCAL_KEY);
+    local?.setItem(PREFERENCES_KEY, JSON.stringify(createAIProviderPreferences(value)));
+    local?.removeItem(LEGACY_LOCAL_KEY);
+  } catch { /* ignored */ }
+  try {
+    session?.setItem(CREDENTIAL_SESSION_KEY, JSON.stringify(createAICredentialSession(value)));
+    session?.removeItem(LEGACY_SESSION_KEY);
   } catch { /* ignored */ }
   return value;
+}
+
+export function forgetAIKey(config = {}, session = globalThis.sessionStorage, local = globalThis.localStorage) {
+  try {
+    session?.removeItem(CREDENTIAL_SESSION_KEY);
+    session?.removeItem(LEGACY_SESSION_KEY);
+  } catch { /* ignored */ }
+  try {
+    local?.removeItem(LEGACY_LOCAL_KEY);
+    const current = local?.getItem(PREFERENCES_KEY);
+    if (current) {
+      try { local?.setItem(PREFERENCES_KEY, JSON.stringify(createAIProviderPreferences(JSON.parse(current)))); }
+      catch { local?.removeItem(PREFERENCES_KEY); }
+    }
+  } catch { /* ignored */ }
+  return normalizeAIConfig({ ...createAIProviderPreferences(config), apiKey: "", testStatus: "untested", testedFingerprint: "", testedAt: null });
 }
 
 export async function sha256(value) {
@@ -279,19 +355,29 @@ function outputFromResponses(data) {
   throw new Error("OpenAI Responses 返回中缺少文本输出。");
 }
 
+export function validateAIBaseUrl(providerId, baseUrl) {
+  const provider = AI_PROVIDERS[providerId] ? providerId : "openai";
+  let parsed;
+  try { parsed = new URL(String(baseUrl || "")); } catch { throw new Error("Base URL 不是有效网址。"); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("Base URL 只支持 HTTP 或 HTTPS。");
+  if (parsed.username || parsed.password) throw new Error("Base URL 不得包含用户名或密码。");
+  if (parsed.search || parsed.hash) throw new Error("Base URL 不得包含查询参数或片段。");
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  if (provider === "custom" && parsed.protocol !== "https:" && !loopback) throw new Error("自定义端点必须使用 HTTPS；HTTP 仅允许本机回环地址。");
+  return parsed;
+}
+
 function validateConfig(config, { requireModel = true } = {}) {
   const value = normalizeAIConfig(config);
   const provider = AI_PROVIDERS[value.provider];
   if (!value.baseUrl) throw new Error("请填写 Base URL。");
   if (requireModel && !value.model) throw new Error("请填写模型名称。");
   if (provider.keyRequired && !value.apiKey) throw new Error("请填写 API Key。");
-  let parsed;
-  try { parsed = new URL(value.baseUrl); } catch { throw new Error("Base URL 不是有效网址。"); }
-  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Base URL 只支持 HTTP 或 HTTPS。");
+  validateAIBaseUrl(value.provider, value.baseUrl);
   return value;
 }
 
-async function fetchWithTimeout(url, options, timeoutMs, fetchImpl, externalSignal) {
+async function fetchWithTimeout(url, options, timeoutMs, fetchImpl, externalSignal, secrets = []) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DOMException("请求超时", "TimeoutError")), timeoutMs);
   const onAbort = () => controller.abort(externalSignal.reason);
@@ -299,14 +385,14 @@ async function fetchWithTimeout(url, options, timeoutMs, fetchImpl, externalSign
   try {
     const response = await fetchImpl(url, { ...options, signal: controller.signal });
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 500);
+      const detail = redactSensitiveText((await response.text()).slice(0, 500), secrets);
       if (response.status === 401 || response.status === 403) throw new Error(`认证失败（${response.status}），请检查密钥与端点。`);
       throw new Error(`请求失败（${response.status}）：${detail || response.statusText}`);
     }
     return response;
   } catch (error) {
     if (error?.name === "AbortError" || error?.name === "TimeoutError") throw new Error("请求已取消或超时。");
-    if (error instanceof TypeError) throw new Error(`网络或 CORS 错误：${error.message}`);
+    if (error instanceof TypeError) throw new Error(`网络或 CORS 错误：${redactSensitiveText(error.message, secrets)}`);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -336,7 +422,7 @@ async function callResponses(config, system, user, schema, options) {
       ],
       text: { format: { type: "json_schema", name: "resume_formatter_result", strict: true, schema } },
     }),
-  }, options.timeoutMs, options.fetchImpl, options.signal);
+  }, options.timeoutMs, options.fetchImpl, options.signal, [config.apiKey]);
   return parseJsonText(outputFromResponses(await response.json()));
 }
 
@@ -362,11 +448,11 @@ async function callChat(config, system, user, schema, options) {
     method: "POST",
     headers: openAIHeaders(config),
     body: JSON.stringify(body),
-  }, options.timeoutMs, options.fetchImpl, options.signal);
+  }, options.timeoutMs, options.fetchImpl, options.signal, [config.apiKey]);
   const data = await response.json();
   if (data?.error) {
     const detail = typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error);
-    throw new Error(`提供商返回错误：${String(detail).slice(0, 500)}`);
+    throw new Error(`提供商返回错误：${redactSensitiveText(String(detail).slice(0, 500), [config.apiKey])}`);
   }
   const choice = data?.choices?.[0];
   if (choice?.finish_reason === "length") throw new Error("模型输出因长度限制被截断，请重试或更换模型。");
@@ -384,7 +470,7 @@ export async function listAvailableModels(config, options = {}) {
   const response = await fetchWithTimeout(`${value.baseUrl}/models`, {
     method: "GET",
     headers: openAIHeaders(value),
-  }, options.timeoutMs || 15_000, fetchImpl, options.signal);
+  }, options.timeoutMs || 15_000, fetchImpl, options.signal, [value.apiKey]);
   let data;
   try { data = await response.json(); } catch { throw new Error("模型列表返回了无法解析的 JSON。"); }
   const source = Array.isArray(data?.data) ? data.data : Array.isArray(data?.models) ? data.models : [];
@@ -397,16 +483,16 @@ export async function listAvailableModels(config, options = {}) {
 }
 
 async function callGemini(config, system, user, schema, options) {
-  const endpoint = `${config.baseUrl}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
+  const endpoint = `${config.baseUrl}/models/${encodeURIComponent(config.model)}:generateContent`;
   const response = await fetchWithTimeout(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: user }] }],
       generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, temperature: 0.2 },
     }),
-  }, options.timeoutMs, options.fetchImpl, options.signal);
+  }, options.timeoutMs, options.fetchImpl, options.signal, [config.apiKey]);
   const data = await response.json();
   const content = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("");
   if (!content) throw new Error("Gemini 返回中缺少候选文本。");
@@ -577,4 +663,9 @@ export async function draftBulletFromEvidence(config, request, options = {}) {
   };
 }
 
-export const aiStorageKeys = Object.freeze({ session: SESSION_KEY, local: LOCAL_KEY });
+export const aiStorageKeys = Object.freeze({
+  preferences: PREFERENCES_KEY,
+  credentialSession: CREDENTIAL_SESSION_KEY,
+  legacySession: LEGACY_SESSION_KEY,
+  legacyLocal: LEGACY_LOCAL_KEY,
+});

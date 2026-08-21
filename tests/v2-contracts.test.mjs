@@ -3,8 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   APP_VERSION,
+  DENSITY_PRESETS,
+  LAYOUT_TOKEN_DEFINITIONS,
   TEMPLATES,
   createDefaultDocument,
+  detectDensityPreset,
+  layoutOverridesForDensity,
   migrateDocument,
   resolveLayout,
   validateDocument,
@@ -123,4 +127,37 @@ test("十二套模板具有独立合同，版式覆盖值被夹紧", () => {
   assert.equal(layout.tokens.sectionGap, 8);
   assert.notEqual(layout.tokens.accent, "javascript:red");
   assert.equal(validateDocument(document).filter((item) => item.level === "error").length, 0);
+});
+
+test("排版参数合同、密度预设与模板默认还原保持确定性", () => {
+  assert.deepEqual(Object.keys(LAYOUT_TOKEN_DEFINITIONS), ["fontSize", "lineHeight", "sectionGap", "pageMarginX", "pageMarginY"]);
+  assert.deepEqual(Object.keys(DENSITY_PRESETS), ["compact", "standard", "spacious"]);
+  const document = createDefaultDocument();
+  document.layout.tokenOverrides = layoutOverridesForDensity(document.layout.templateId, "compact", { accent: "#123456" });
+  assert.equal(detectDensityPreset(document), "compact");
+  assert.equal(document.layout.tokenOverrides.fontSize, 9.7);
+  assert.equal(document.layout.tokenOverrides.pageMarginX, 14.5);
+  assert.equal(document.layout.tokenOverrides.accent, "#123456");
+  document.layout.tokenOverrides = layoutOverridesForDensity(document.layout.templateId, "standard", document.layout.tokenOverrides);
+  assert.deepEqual(document.layout.tokenOverrides, { accent: "#123456" });
+  assert.equal(detectDensityPreset(document), "standard");
+});
+
+test("ResumeDocumentV2 严格丢弃未知字段和非法照片来源", () => {
+  const source = createDefaultDocument();
+  source.apiKey = "must-not-survive";
+  source.profile.password = "must-not-survive";
+  source.layout.injected = "must-not-survive";
+  source.metadata.credential = "must-not-survive";
+  source.assets.photo = { dataUrl: "https://remote.example/photo.png", scale: 1 };
+  const migrated = migrateDocument(source);
+  const serialized = JSON.stringify(migrated);
+  assert.doesNotMatch(serialized, /must-not-survive|remote\.example|apiKey|password|injected|credential/);
+  assert.equal(migrated.assets.photo, null);
+
+  source.assets.photo = { dataUrl: "data:image/png;base64,AA==", scale: 99, offsetX: -99, offsetY: 99 };
+  const clamped = migrateDocument(source).assets.photo;
+  assert.equal(clamped.scale, 2);
+  assert.equal(clamped.offsetX, -35);
+  assert.equal(clamped.offsetY, 35);
 });

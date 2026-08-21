@@ -6,6 +6,7 @@ import {
   createAIRequestDisclosure,
   createSelectionReference,
   draftBulletFromEvidence,
+  forgetAIKey,
   listAvailableModels,
   loadAIConfig,
   normalizeAIConfig,
@@ -18,20 +19,25 @@ import {
 import { CHECK_SEVERITIES, buildQuickScan, evaluateExportReadiness, runResumeChecks } from "./checks.js";
 import {
   SECTION_DEFINITIONS,
+  DENSITY_PRESETS,
+  LAYOUT_TOKEN_DEFINITIONS,
   TEMPLATE_CATEGORIES,
   TEMPLATES,
   clone,
   createEmptyEntry,
   createEmptySection,
   createId,
+  detectDensityPreset,
   documentToPlainText,
   getTemplate,
+  layoutOverridesForDensity,
   migrateDocument,
   resolveLayout,
   validateDocument,
 } from "./contracts.js";
 import { importResumeFile } from "./file-import.js";
 import { serializeMarkdown } from "./markdown.js";
+import { clearResumeFormatterStorage, createLocalDataInventory, redactSensitiveText, stripSensitiveData } from "./privacy.js";
 import {
   diffWords,
   getByPath,
@@ -51,6 +57,16 @@ let renderFrame = 0;
 let templateQuery = "";
 let templateCategory = "all";
 let currentChecks = [];
+let activeAIController = null;
+
+const LAYOUT_CSS_PROPERTIES = Object.freeze({
+  fontSize: ["--resume-font-size", "pt"],
+  lineHeight: ["--resume-line-height", ""],
+  sectionGap: ["--section-gap", "mm"],
+  pageMarginX: ["--page-margin-x", "mm"],
+  pageMarginY: ["--page-margin-y", "mm"],
+  accent: ["--resume-accent", ""],
+});
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -497,25 +513,39 @@ function applyReadOnlyState() {
   $("#readonly-status").hidden = !readOnly;
   for (const item of $$("#resume-paper [data-edit-path]")) item.contentEditable = readOnly ? "false" : "plaintext-only";
   for (const item of $$("#resume-paper button[data-action], #mobile-editor input, #mobile-editor textarea, #mobile-editor select")) item.disabled = readOnly;
-  for (const id of ["btn-import", "btn-save", "btn-add-section", "btn-save-version", "btn-photo", "photo-toggle", "font-size", "line-height", "section-gap", "btn-auto-fit", "btn-analyze-jd", "btn-jd-compare", "btn-add-evidence"]) {
+  for (const id of ["btn-import", "btn-save", "btn-add-section", "btn-save-version", "btn-photo", "photo-toggle", "btn-auto-fit", "btn-analyze-jd", "btn-jd-compare", "btn-add-evidence", "btn-reset-layout", "accent-color", "accent-color-text"]) {
     const item = $(`#${id}`);
     if (item) item.disabled = readOnly;
   }
-  for (const item of $$("[data-template-id], [data-recommended-template-id], [data-paper], [data-requirement-id], [data-evidence-id]")) item.disabled = readOnly;
+  for (const item of $$("[data-template-id], [data-recommended-template-id], [data-paper], [data-requirement-id], [data-evidence-id], [data-density], [data-layout-reset], [data-layout-control] input")) item.disabled = readOnly;
   if (readOnly) $("#selection-toolbar").hidden = true;
 }
 
 function syncControls(doc) {
   const layout = resolveLayout(doc);
-  const values = {
-    "font-size": [layout.tokens.fontSize, `${layout.tokens.fontSize.toFixed(1)} pt`],
-    "line-height": [layout.tokens.lineHeight, layout.tokens.lineHeight.toFixed(2)],
-    "section-gap": [layout.tokens.sectionGap, `${layout.tokens.sectionGap.toFixed(1)} mm`],
-  };
-  for (const [id, [value, label]] of Object.entries(values)) {
-    $(`#${id}`).value = value;
-    $(`#${id}-value`).value = label;
-    $(`#${id}-value`).textContent = label;
+  for (const [key, definition] of Object.entries(LAYOUT_TOKEN_DEFINITIONS)) {
+    const value = layout.tokens[key];
+    $(`#${definition.id}`).value = value;
+    $(`#${definition.id}-number`).value = value.toFixed(definition.decimals);
+    $(`#${definition.id}-default`).textContent = `默认 ${layout.template.tokens[key].toFixed(definition.decimals)}${definition.unit ? ` ${definition.unit}` : ""}`;
+    $(`[data-layout-control="${key}"]`).dataset.invalid = "false";
+    $(`#${definition.id}-error`).textContent = "";
+    $(`[data-layout-reset="${key}"]`).disabled = doc.layout?.tokenOverrides?.[key] == null;
+  }
+  const accent = layout.tokens.accent.toLowerCase();
+  $("#accent-color").value = accent;
+  $("#accent-color-text").value = accent.toUpperCase();
+  $("#accent-color-default").textContent = `默认 ${layout.template.tokens.accent.toUpperCase()}`;
+  $("#accent-color-error").textContent = "";
+  $("[data-layout-reset=\"accent\"]").disabled = doc.layout?.tokenOverrides?.accent == null;
+  const overrideCount = Object.keys(doc.layout?.tokenOverrides || {}).length;
+  $("#layout-custom-badge").textContent = overrideCount ? `已自定义 ${overrideCount} 项` : "模板默认";
+  $("#layout-custom-badge").classList.toggle("connected", overrideCount > 0);
+  const density = detectDensityPreset(doc);
+  for (const button of $$("[data-density]")) {
+    const active = button.dataset.density === density;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   }
   $("#photo-toggle").checked = layout.showPhoto;
   $("#photo-toggle").disabled = !layout.template.supportsPhoto;
@@ -528,6 +558,104 @@ function syncControls(doc) {
   badge.textContent = connected ? `${AI_PROVIDERS[aiConfig.provider].name} 已连接` : "未配置";
   badge.classList.toggle("connected", connected);
   applyReadOnlyState();
+}
+
+function previewLayoutToken(key, value) {
+  const [property, unit] = LAYOUT_CSS_PROPERTIES[key];
+  $("#resume-paper").style.setProperty(property, `${value}${unit}`);
+  scheduleDiagnostics();
+}
+
+function readLayoutValue(key, input) {
+  const definition = LAYOUT_TOKEN_DEFINITIONS[key];
+  const value = Number(input.value);
+  return Number.isFinite(value) && value >= definition.min && value <= definition.max ? Number(value.toFixed(definition.decimals)) : null;
+}
+
+function showLayoutInputError(key, message) {
+  const definition = LAYOUT_TOKEN_DEFINITIONS[key];
+  $(`[data-layout-control="${key}"]`).dataset.invalid = message ? "true" : "false";
+  $(`#${definition.id}-error`).textContent = message;
+}
+
+function commitLayoutToken(key, input) {
+  const definition = LAYOUT_TOKEN_DEFINITIONS[key];
+  const value = readLayoutValue(key, input);
+  if (value == null) {
+    const message = `请输入 ${definition.min}–${definition.max}${definition.unit ? ` ${definition.unit}` : ""}`;
+    syncControls(store.document);
+    showLayoutInputError(key, message);
+    return false;
+  }
+  showLayoutInputError(key, "");
+  if (Number(resolveLayout(store.document).tokens[key]) === value) return true;
+  store.transact(`调整${definition.label}`, (doc) => { doc.layout.tokenOverrides[key] = value; });
+  return true;
+}
+
+function wireLayoutControls() {
+  for (const [key, definition] of Object.entries(LAYOUT_TOKEN_DEFINITIONS)) {
+    const range = $(`#${definition.id}`);
+    const number = $(`#${definition.id}-number`);
+    const preview = (input, companion) => {
+      const value = readLayoutValue(key, input);
+      if (value == null) return showLayoutInputError(key, `范围 ${definition.min}–${definition.max}`);
+      showLayoutInputError(key, "");
+      companion.value = value.toFixed(definition.decimals);
+      previewLayoutToken(key, value);
+    };
+    range.addEventListener("input", () => preview(range, number));
+    range.addEventListener("change", () => commitLayoutToken(key, range));
+    number.addEventListener("input", () => preview(number, range));
+    number.addEventListener("blur", () => commitLayoutToken(key, number));
+    number.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); number.blur(); }
+      if (event.key === "Escape") { event.preventDefault(); syncControls(store.document); number.blur(); }
+    });
+  }
+  for (const button of $$("[data-layout-reset]")) button.addEventListener("click", () => {
+    const key = button.dataset.layoutReset;
+    if (store.document.layout.tokenOverrides?.[key] == null) return;
+    store.transact("还原排版参数", (doc) => { delete doc.layout.tokenOverrides[key]; });
+  });
+  for (const button of $$("[data-density]")) button.addEventListener("click", () => {
+    const presetId = button.dataset.density;
+    store.transact(`应用${DENSITY_PRESETS[presetId].label}密度`, (doc) => {
+      doc.layout.tokenOverrides = layoutOverridesForDensity(doc.layout.templateId, presetId, doc.layout.tokenOverrides);
+    });
+  });
+  $("#btn-reset-layout").addEventListener("click", () => {
+    if (!Object.keys(store.document.layout.tokenOverrides || {}).length) return;
+    store.transact("还原模板排版", (doc) => { doc.layout.tokenOverrides = {}; });
+  });
+  const color = $("#accent-color");
+  const colorText = $("#accent-color-text");
+  const previewColor = (value) => {
+    if (!/^#[0-9a-f]{6}$/i.test(value)) {
+      $("#accent-color-error").textContent = "请输入 #RRGGBB";
+      return false;
+    }
+    $("#accent-color-error").textContent = "";
+    color.value = value;
+    colorText.value = value.toUpperCase();
+    previewLayoutToken("accent", value.toLowerCase());
+    return true;
+  };
+  const commitColor = (value) => {
+    if (!previewColor(value)) {
+      syncControls(store.document);
+      $("#accent-color-error").textContent = "请输入 #RRGGBB";
+      return;
+    }
+    const normalized = value.toLowerCase();
+    if (resolveLayout(store.document).tokens.accent.toLowerCase() === normalized) return;
+    store.transact("调整强调色", (doc) => { doc.layout.tokenOverrides.accent = normalized; });
+  };
+  color.addEventListener("input", () => previewColor(color.value));
+  color.addEventListener("change", () => commitColor(color.value));
+  colorText.addEventListener("input", () => { if (/^#[0-9a-f]{6}$/i.test(colorText.value)) previewColor(colorText.value); });
+  colorText.addEventListener("blur", () => commitColor(colorText.value));
+  colorText.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); colorText.blur(); } });
 }
 
 function scheduleDiagnostics() {
@@ -655,11 +783,16 @@ async function captureSelection() {
   toolbar.style.top = `${Math.max(8, rect.top - toolbar.offsetHeight - 8)}px`;
 }
 
-function loadingModal(title) {
+function loadingModal(title, controller = null) {
   const modal = openModal(title, { dismissible: false });
   const row = node("div", "loading-row");
   row.append(node("div", "spinner"), node("span", "", "正在等待提供商返回..."));
   modal.body.append(row);
+  if (controller) modal.footer.append(modalButton("取消请求", "", () => {
+    controller.abort();
+    modal.close();
+    toast("请求已取消，本地内容未改变。", "info");
+  }));
   return modal;
 }
 
@@ -670,6 +803,8 @@ function openAIRequestPreflight(title, textType, content, run) {
   for (const [label, value] of [
     ["提供商", disclosure.providerName],
     ["模型", disclosure.model || "未填写"],
+    ["请求目标", disclosure.destinationHost],
+    ["传输", disclosure.transportSecure ? "HTTPS" : "本机 HTTP"],
     ["文本类型", disclosure.textType],
     ["文本字符", disclosure.characterCount.toLocaleString("zh-CN")],
   ]) details.append(node("dt", "", label), node("dd", "", value));
@@ -744,17 +879,32 @@ function openAISettings() {
   for (const [id, item] of Object.entries(AI_PROVIDERS)) {
     const option = node("option", "", item.name); option.value = id; provider.append(option);
   }
-  const baseUrl = node("input"); baseUrl.type = "url";
+  const baseUrl = node("input"); baseUrl.type = "url"; baseUrl.autocomplete = "off"; baseUrl.spellcheck = false;
   const advanced = node("details", "advanced-settings");
   const advancedSummary = node("summary", "", "高级设置");
   const model = node("input"); model.placeholder = "输入模型 ID"; model.autocomplete = "off";
   const modelList = node("datalist"); modelList.id = "ai-model-options"; model.setAttribute("list", modelList.id);
   const modelStatus = node("p", "field-help"); modelStatus.hidden = true;
-  const apiKey = node("input"); apiKey.type = "password"; apiKey.autocomplete = "off"; apiKey.dataset.sensitive = "true";
-  const remember = node("input"); remember.type = "checkbox";
-  const rememberLabel = node("label", "remember-control"); rememberLabel.append(remember, node("span", "", "记住到本机"));
+  const apiKey = node("input");
+  apiKey.type = "password";
+  apiKey.autocomplete = "off";
+  apiKey.autocapitalize = "none";
+  apiKey.spellcheck = false;
+  apiKey.dataset.sensitive = "true";
+  apiKey.dataset.lpignore = "true";
+  apiKey.dataset.formType = "other";
+  const credentialStatus = node("p", "field-help credential-status");
+  const candidateConfig = () => normalizeAIConfig({
+    provider: provider.value,
+    baseUrl: baseUrl.value,
+    model: model.value,
+    apiKey: apiKey.value || (provider.value === aiConfig.provider ? aiConfig.apiKey : ""),
+  });
+  const updateDestination = () => {
+    advancedSummary.textContent = `请求目标 · ${createAIRequestDisclosure(candidateConfig(), "", "").destinationHost}`;
+  };
   const modelsButton = modalButton("读取可用模型", "", async () => {
-    const candidate = normalizeAIConfig({ provider: provider.value, baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, remember: remember.checked });
+    const candidate = candidateConfig();
     modelsButton.disabled = true;
     modelsButton.textContent = "读取中...";
     modelStatus.hidden = true;
@@ -778,27 +928,40 @@ function openAISettings() {
     provider.value = config.provider;
     baseUrl.value = config.baseUrl;
     model.value = config.model;
-    apiKey.value = config.apiKey;
-    remember.checked = config.remember;
+    apiKey.value = "";
+    apiKey.placeholder = config.apiKey ? "当前标签页已配置；留空则继续使用" : "粘贴 API Key";
+    credentialStatus.textContent = config.apiKey ? "密钥仅保留在当前标签页，关闭标签页后失效。" : "尚未配置密钥。";
     modelList.replaceChildren();
     modelStatus.hidden = true;
     modelsButton.hidden = !AI_PROVIDERS[config.provider].supportsModelDiscovery;
+    baseUrl.readOnly = config.provider !== "custom";
     advanced.open = config.provider === "custom";
+    advancedSummary.textContent = `请求目标 · ${createAIRequestDisclosure(config, "", "").destinationHost}`;
   };
   fill(aiConfig);
-  provider.addEventListener("change", () => fill(normalizeAIConfig({ provider: provider.value, remember: remember.checked })));
+  provider.addEventListener("change", () => fill(normalizeAIConfig({ provider: provider.value })));
+  baseUrl.addEventListener("input", updateDestination);
   grid.append(
     formField("提供商", provider),
     formField("模型", model),
     formField("API Key", apiKey, true),
-    formField("凭据保存", rememberLabel, true),
+    credentialStatus,
   );
   advanced.append(advancedSummary, formField("Base URL", baseUrl, true));
-  modal.body.append(grid, advanced, modelList, modelStatus, node("div", "risk-notice", "浏览器直连意味着密钥会存在于当前页面运行环境。默认仅写入 sessionStorage，关闭标签页后失效；选择“记住到本机”会以明文写入 localStorage。密钥不会进入简历、HTML、Markdown 或 JSON 导出。"));
+  modal.body.append(grid, advanced, modelList, modelStatus, node("div", "risk-notice", "浏览器直连意味着当前页面、开发者工具和有权限的浏览器扩展可能读取密钥。密钥只进入当前标签页的 sessionStorage，不会写入本机长期存储或任何导出。建议使用可撤销、限额和最小权限的密钥。"));
   modal.footer.append(modelsButton);
+  const forgetButton = modalButton("忘记 API Key", "danger", () => {
+    aiConfig = forgetAIKey(aiConfig);
+    fill(aiConfig);
+    forgetButton.disabled = true;
+    syncControls(store.document);
+    toast("当前标签页的 API Key 已清除。", "success");
+  });
+  forgetButton.disabled = !aiConfig.apiKey;
+  modal.footer.append(forgetButton);
   modal.footer.append(modalButton("取消", "", modal.close));
   const testButton = modalButton("测试连接并保存", "primary", async () => {
-    const candidate = normalizeAIConfig({ provider: provider.value, baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, remember: remember.checked });
+    const candidate = candidateConfig();
     testButton.disabled = true;
     testButton.textContent = "测试中...";
     try {
@@ -818,9 +981,11 @@ function openAISettings() {
 function handleFullReview() {
   const resumeText = documentToPlainText(store.document);
   openAIRequestPreflight("发送全文审阅", "简历全文", resumeText, async () => {
-    const wait = loadingModal("全文审阅");
+    const controller = new AbortController();
+    activeAIController = controller;
+    const wait = loadingModal("全文审阅", controller);
     try {
-      const result = await reviewResume(aiConfig, store.document);
+      const result = await reviewResume(aiConfig, store.document, { signal: controller.signal });
       wait.close();
       showInspectorTab("checks");
       const target = $("#ai-results");
@@ -834,7 +999,8 @@ function handleFullReview() {
         target.append(item);
       }
       document.body.classList.add("inspector-open");
-    } catch (error) { wait.close(); toast(error.message, "error"); }
+    } catch (error) { wait.close(); if (!controller.signal.aborted) toast(error.message, "error"); }
+    finally { if (activeAIController === controller) activeAIController = null; }
   });
 }
 
@@ -844,12 +1010,15 @@ function openJDCompare() {
   const resumeText = documentToPlainText(store.document);
   const jdText = application.jdText.slice(0, 20_000);
   openAIRequestPreflight("发送岗位对照", "简历全文与岗位描述", [resumeText, jdText], async () => {
-    const wait = loadingModal("AI 补充对照");
+    const controller = new AbortController();
+    activeAIController = controller;
+    const wait = loadingModal("AI 补充对照", controller);
     try {
-      const result = await compareWithJD(aiConfig, store.document, application.jdText);
+      const result = await compareWithJD(aiConfig, store.document, application.jdText, { signal: controller.signal });
       wait.close();
       renderJDResults(result);
-    } catch (error) { wait.close(); toast(error.message, "error"); }
+    } catch (error) { wait.close(); if (!controller.signal.aborted) toast(error.message, "error"); }
+    finally { if (activeAIController === controller) activeAIController = null; }
   });
 }
 
@@ -1155,9 +1324,33 @@ function download(content, fileName, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function safeFileName(extension) {
-  const base = (store.document.resumeName || store.document.profile.name || "resume").replace(/[\\/:*?"<>|]/g, "-").trim() || "resume";
+function safeFileName(extension, preferredBase = "") {
+  const rawBase = (preferredBase || store.document.resumeName || store.document.profile.name || "resume")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
+    .replace(/[. ]+$/g, "")
+    .trim() || "resume";
+  const base = Array.from(rawBase).slice(0, 120).join("").replace(/[. ]+$/g, "") || "resume";
   return `${base}.${extension}`;
+}
+
+function safeResumeDocument() {
+  return stripSensitiveData(migrateDocument(store.document), { secrets: [aiConfig.apiKey] });
+}
+
+function embeddedStateElement(root = document) {
+  return root.querySelector("#embedded-resume-state");
+}
+
+function readEmbeddedState(root = document) {
+  const embedded = embeddedStateElement(root);
+  return embedded?.content ? embedded.content.textContent.trim() : embedded?.textContent?.trim() || "";
+}
+
+function writeEmbeddedState(root, value) {
+  const embedded = embeddedStateElement(root);
+  if (!embedded) return;
+  if (embedded.content) embedded.content.textContent = value;
+  else embedded.textContent = value;
 }
 
 function recordDocumentExport(type, details = {}) {
@@ -1171,13 +1364,13 @@ function recordDocumentExport(type, details = {}) {
 }
 
 function exportJson() {
-  download(`${JSON.stringify(store.document, null, 2)}\n`, safeFileName("json"), "application/json;charset=utf-8");
+  download(`${JSON.stringify(safeResumeDocument(), null, 2)}\n`, safeFileName("json"), "application/json;charset=utf-8");
   recordDocumentExport("json");
 }
 
 function exportWorkspace() {
   store.workspace.setActiveDocument(store.document);
-  const backup = store.workspace.backup();
+  const backup = stripSensitiveData(store.workspace.backup(), { secrets: [aiConfig.apiKey] });
   const modal = openModal("导出工作区备份");
   modal.body.append(
     node("div", "risk-notice", "工作区 JSON 包含完整 JD、证据、岗位版本和照片资产，可能含敏感信息。文件不会包含 API Key，但请只保存在可信位置。"),
@@ -1211,31 +1404,108 @@ async function importWorkspaceFile(file) {
 }
 
 function exportMarkdown() {
-  download(serializeMarkdown(store.document), safeFileName("md"), "text/markdown;charset=utf-8");
+  download(serializeMarkdown(safeResumeDocument()), safeFileName("md"), "text/markdown;charset=utf-8");
   recordDocumentExport("markdown");
 }
 
-function exportHtml() {
-  closeModal();
-  const cloneDoc = document.documentElement.cloneNode(true);
-  cloneDoc.querySelector("#modal-root")?.replaceChildren();
-  cloneDoc.querySelector("#toast-root")?.replaceChildren();
-  cloneDoc.querySelector("#selection-toolbar")?.setAttribute("hidden", "");
-  cloneDoc.querySelector("#workspace-document-list")?.replaceChildren();
-  cloneDoc.querySelector("#evidence-list")?.replaceChildren();
-  cloneDoc.querySelector("#requirement-list")?.replaceChildren();
-  cloneDoc.querySelector("#export-history-list")?.replaceChildren();
-  cloneDoc.querySelector("#job-workspace")?.setAttribute("hidden", "");
-  for (const id of ["job-company", "job-role", "job-language", "job-source-note", "job-jd"]) {
-    const item = cloneDoc.querySelector(`#${id}`);
-    if (item) { item.value = ""; item.textContent = ""; item.removeAttribute("value"); }
+async function inlineScriptCspHash(html) {
+  if (!globalThis.crypto?.subtle) throw new Error("当前浏览器缺少安全哈希能力，无法生成受 CSP 保护的独立 HTML。");
+  const match = String(html).match(/<script>([\s\S]*?)<\/script>/i);
+  if (!match) throw new Error("独立 HTML 中缺少应用脚本。");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(match[1]));
+  let binary = "";
+  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function redactStandaloneHtml(html, secrets = []) {
+  const source = String(html);
+  const scriptPattern = /<script(?:\s[^>]*)?>[\s\S]*?<\/script>/gi;
+  let result = "";
+  let cursor = 0;
+  for (const match of source.matchAll(scriptPattern)) {
+    result += redactSensitiveText(source.slice(cursor, match.index), secrets);
+    result += match[0];
+    cursor = match.index + match[0].length;
   }
-  cloneDoc.querySelectorAll("[data-sensitive]").forEach((item) => { item.value = ""; item.setAttribute("value", ""); });
-  const embedded = cloneDoc.querySelector("#embedded-resume-state");
-  embedded.textContent = JSON.stringify(store.document).replace(/<\/script/gi, "<\\/script");
-  const html = `<!doctype html>\n${cloneDoc.outerHTML}`;
-  download(html, safeFileName("html"), "text/html;charset=utf-8");
-  recordDocumentExport("html", { templateId: store.document.layout.templateId, paper: store.document.layout.paper });
+  return result + redactSensitiveText(source.slice(cursor), secrets);
+}
+
+async function exportHtml() {
+  try {
+    closeModal();
+    const cloneDoc = document.documentElement.cloneNode(true);
+    cloneDoc.querySelector("#modal-root")?.replaceChildren();
+    cloneDoc.querySelector("#toast-root")?.replaceChildren();
+    cloneDoc.querySelector("#selection-toolbar")?.setAttribute("hidden", "");
+    cloneDoc.querySelector("#workspace-document-list")?.replaceChildren();
+    cloneDoc.querySelector("#evidence-list")?.replaceChildren();
+    cloneDoc.querySelector("#requirement-list")?.replaceChildren();
+    cloneDoc.querySelector("#export-history-list")?.replaceChildren();
+    cloneDoc.querySelector("#job-workspace")?.setAttribute("hidden", "");
+    for (const id of ["job-company", "job-role", "job-language", "job-source-note", "job-jd"]) {
+      const item = cloneDoc.querySelector(`#${id}`);
+      if (item) { item.value = ""; item.textContent = ""; item.removeAttribute("value"); }
+    }
+    cloneDoc.querySelectorAll("[data-sensitive]").forEach((item) => { item.value = ""; item.setAttribute("value", ""); });
+    writeEmbeddedState(cloneDoc, JSON.stringify(safeResumeDocument()));
+    const serialized = `<!doctype html>\n${cloneDoc.outerHTML}`;
+    const scriptHash = await inlineScriptCspHash(serialized);
+    const csp = cloneDoc.querySelector('meta[http-equiv="Content-Security-Policy"]');
+    if (!csp) throw new Error("独立 HTML 中缺少内容安全策略。");
+    csp.content = csp.content.replace(/script-src\s+[^;]+/i, `script-src 'sha256-${scriptHash}'`);
+    const html = redactStandaloneHtml(`<!doctype html>\n${cloneDoc.outerHTML}`, [aiConfig.apiKey]);
+    download(html, safeFileName("html"), "text/html;charset=utf-8");
+    recordDocumentExport("html", { templateId: store.document.layout.templateId, paper: store.document.layout.paper });
+  } catch (error) {
+    toast(redactSensitiveText(error.message, [aiConfig.apiKey]), "error");
+  }
+}
+
+function openPrivacyCenter() {
+  const inventory = createLocalDataInventory(store.workspace.workspace, store.listVersions(), aiConfig);
+  const modal = openModal("隐私与本地数据");
+  const grid = node("dl", "privacy-inventory");
+  for (const [label, value] of [
+    ["简历文档", `${inventory.documents} 份`],
+    ["岗位任务", `${inventory.applications} 个`],
+    ["照片资产", `${inventory.assets} 个`],
+    ["本地版本", `${inventory.versions} 个`],
+    ["JD 内容", `${inventory.jdCharacters.toLocaleString("zh-CN")} 字`],
+    ["事实证据", `${inventory.evidence} 条`],
+    ["API Key", inventory.hasCredential ? "当前标签页已配置" : "未配置"],
+  ]) grid.append(node("dt", "", label), node("dd", "", value));
+  modal.body.append(grid, node("p", "field-help", "简历、岗位、JD、证据和照片默认保存在当前浏览器来源。本工具不会把这些内容上传到项目服务器。"));
+  if (readEmbeddedState() && readEmbeddedState() !== "{}") {
+    modal.body.append(node("div", "warning-notice", "当前是内嵌简历的独立 HTML。清除浏览器数据不会删除原 HTML 文件中的简历；请同时删除或替换该文件。"));
+  }
+  modal.footer.append(modalButton("导出工作区备份", "", () => { modal.close(); exportWorkspace(); }));
+  modal.footer.append(modalButton("关闭", "", modal.close));
+  modal.footer.append(modalButton("清除全部本地数据", "danger", () => {
+    const confirm = openModal("确认清除本地数据");
+    confirm.body.append(node("div", "warning-notice blocker-notice", "将清除当前浏览器来源中的简历、岗位、JD、证据、照片、版本和 AI 配置。已下载的 HTML、JSON、Markdown 和 PDF 文件不会被删除。"));
+    confirm.footer.append(modalButton("取消", "", confirm.close), modalButton("确认清除", "danger", () => {
+      clearResumeFormatterStorage();
+      aiConfig = forgetAIKey(normalizeAIConfig());
+      activeSelection = null;
+      activeAIController?.abort();
+      activeAIController = null;
+      writeEmbeddedState(document, "{}");
+      $("#ai-results").replaceChildren();
+      store.resetLocalSession();
+      closeModal();
+      toast("本地数据已清除，当前页面已切换为空白工作区。", "success");
+    }));
+  }));
+}
+
+function suggestedPrintTitle() {
+  const application = store.workspace.getActiveApplication();
+  const date = new Date().toISOString().slice(0, 10);
+  const name = store.document.profile?.name || "resume";
+  return application
+    ? [application.company, application.role, name, date].filter(Boolean).join("-")
+    : [store.document.resumeName, name].filter(Boolean).join("-");
 }
 
 function openExportGate() {
@@ -1264,12 +1534,23 @@ function openExportGate() {
     const confirmations = [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
     const readiness = evaluateExportReadiness(currentChecks, "pdf", confirmations);
     if (!readiness.ready) return;
+    const printTitle = safeFileName("pdf", suggestedPrintTitle()).replace(/\.pdf$/i, "");
+    const previousTitle = document.title;
+    document.title = printTitle;
+    const restoreTitle = () => {
+      document.title = previousTitle;
+      window.removeEventListener("afterprint", restoreTitle);
+    };
+    window.addEventListener("afterprint", restoreTitle, { once: true });
     store.workspace.setActiveDocument(store.document);
     store.workspace.recordExport("pdf", { templateId: store.document.layout.templateId, paper: store.document.layout.paper, confirmedWarnings: confirmations });
     store.dirty = false;
     modal.close();
     renderAll();
-    setTimeout(() => window.print(), 0);
+    setTimeout(() => {
+      try { window.print(); }
+      finally { setTimeout(restoreTitle, 0); }
+    }, 0);
   });
   const update = () => {
     const confirmations = [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
@@ -1335,18 +1616,29 @@ function autoFit() {
   if (!overflowState.overflow) return;
   const layout = resolveLayout(store.document);
   let { fontSize, lineHeight, sectionGap } = layout.tokens;
+  const before = { fontSize, lineHeight, sectionGap };
   const paper = $("#resume-paper");
-  for (let step = 0; step < 9; step += 1) {
+  for (let step = 0; step < 60; step += 1) {
     if (!locateOverflow(paper).overflow) break;
-    if (sectionGap > 1.5) sectionGap = Math.max(1.5, sectionGap - 0.35);
-    else if (lineHeight > 1.25) lineHeight = Math.max(1.25, lineHeight - 0.035);
-    else fontSize = Math.max(8, fontSize - 0.2);
+    if (sectionGap > 1.5) sectionGap = Number(Math.max(1.5, sectionGap - 0.2).toFixed(1));
+    else if (lineHeight > 1.25) lineHeight = Number(Math.max(1.25, lineHeight - 0.02).toFixed(2));
+    else if (fontSize > 8) fontSize = Number(Math.max(8, fontSize - 0.1).toFixed(1));
+    else break;
     paper.style.setProperty("--section-gap", `${sectionGap}mm`);
     paper.style.setProperty("--resume-line-height", lineHeight);
     paper.style.setProperty("--resume-font-size", `${fontSize}pt`);
   }
+  if (fontSize === before.fontSize && lineHeight === before.lineHeight && sectionGap === before.sectionGap) {
+    return toast("已达到自动适配的可读下限，请精简文字或改用更紧凑模板。", "info");
+  }
   store.transact("自动适配页面", (doc) => Object.assign(doc.layout.tokenOverrides, { fontSize, lineHeight, sectionGap }));
-  toast(locateOverflow($("#resume-paper")).overflow ? "内容仍超过单页，请精简文字或改用更紧凑模板。" : "已在可读范围内压缩版式。", overflowState.overflow ? "info" : "success");
+  const finalOverflow = locateOverflow($("#resume-paper"));
+  const changes = [
+    before.sectionGap !== sectionGap ? `间距 ${before.sectionGap.toFixed(1)}→${sectionGap.toFixed(1)} mm` : "",
+    before.lineHeight !== lineHeight ? `行高 ${before.lineHeight.toFixed(2)}→${lineHeight.toFixed(2)}` : "",
+    before.fontSize !== fontSize ? `字号 ${before.fontSize.toFixed(1)}→${fontSize.toFixed(1)} pt` : "",
+  ].filter(Boolean).join("，");
+  toast(finalOverflow.overflow ? `已压缩${changes ? `：${changes}` : ""}；内容仍超出，请精简文字。` : `自动适配完成：${changes}`, finalOverflow.overflow ? "info" : "success");
 }
 
 function wireStaticEvents() {
@@ -1375,6 +1667,7 @@ function wireStaticEvents() {
   $("#btn-import-workspace").addEventListener("click", () => $("#workspace-file-input").click());
   $("#btn-export-workspace").addEventListener("click", exportWorkspace);
   $("#btn-print").addEventListener("click", openExportGate);
+  $("#btn-privacy").addEventListener("click", openPrivacyCenter);
   $("#btn-ai-settings").addEventListener("click", openAISettings);
   $("#btn-quick-scan").addEventListener("click", openQuickScan);
   $("#btn-review-resume").addEventListener("click", handleFullReview);
@@ -1435,9 +1728,7 @@ function wireStaticEvents() {
   for (const button of $$("[data-sidebar-tab]")) button.addEventListener("click", () => showSidebarTab(button.dataset.sidebarTab));
   for (const button of $$("[data-inspector-tab]")) button.addEventListener("click", () => { showInspectorTab(button.dataset.inspectorTab); setInspectorOpen(true); });
   for (const button of $$("[data-paper]")) button.addEventListener("click", () => store.transact("切换纸张", (doc) => { doc.layout.paper = button.dataset.paper; }));
-  for (const id of ["font-size", "line-height", "section-gap"]) {
-    $(`#${id}`).addEventListener("change", (event) => store.transact("调整版式", (doc) => { doc.layout.tokenOverrides[id === "font-size" ? "fontSize" : id === "line-height" ? "lineHeight" : "sectionGap"] = Number(event.target.value); }));
-  }
+  wireLayoutControls();
   $("#zoom-slider").addEventListener("input", (event) => {
     const zoom = Number(event.target.value); document.documentElement.style.setProperty("--preview-scale", zoom / 100); $("#zoom-value").textContent = `${zoom}%`;
   });
@@ -1452,7 +1743,12 @@ function wireStaticEvents() {
   wireInspectorDrag();
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? store.redo() : store.undo(); }
-    if (event.key === "Escape") { closeModal(); $("#selection-toolbar").hidden = true; }
+    if (event.key === "Escape") {
+      activeAIController?.abort();
+      activeAIController = null;
+      closeModal();
+      $("#selection-toolbar").hidden = true;
+    }
   });
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".command-menu")) $("#export-menu").hidden = true;
@@ -1460,7 +1756,7 @@ function wireStaticEvents() {
 }
 
 function loadEmbeddedDocument() {
-  const raw = $("#embedded-resume-state")?.textContent?.trim();
+  const raw = readEmbeddedState();
   if (!raw || raw === "{}") return;
   try {
     const embedded = migrateDocument(JSON.parse(raw));

@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#f5f5f3">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="__CSP__">
   <meta name="application-version" content="__APP_VERSION__">
   <meta name="description" content="本地优先的简历编辑与排版工具">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23191b19'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='Arial' font-size='18' font-weight='700' fill='white'%3ER%3C/text%3E%3C/svg%3E">
@@ -36,6 +38,7 @@
             <button id="btn-import-workspace" type="button" role="menuitem"><i data-lucide="archive-restore"></i>恢复工作区</button>
             <button id="btn-export-workspace" type="button" role="menuitem"><i data-lucide="archive"></i>工作区 JSON</button>
             <button id="btn-print" type="button" role="menuitem"><i data-lucide="send"></i>投递 PDF</button>
+            <button id="btn-privacy" type="button" role="menuitem"><i data-lucide="shield-check"></i>隐私与本地数据</button>
           </div>
         </div>
         <button id="btn-ai-settings" class="icon-command" type="button" title="AI 设置" aria-label="AI 设置"><i data-lucide="sparkles"></i></button>
@@ -86,10 +89,32 @@
         </div>
         <section id="inspector-layout" class="inspector-panel active">
           <div class="inspector-section"><div class="control-row"><h2>推荐模板</h2><button id="btn-all-templates" class="text-link" type="button">全部 12 套</button></div><div id="recommended-templates" class="recommended-templates"></div><div class="segmented-control full" role="group" aria-label="纸张大小"><button type="button" data-paper="A4" class="active">A4</button><button type="button" data-paper="Letter">US Letter</button></div></div>
-          <div class="inspector-section">
-            <div class="control-row"><label for="font-size">字号</label><output id="font-size-value">10 pt</output></div><input id="font-size" class="range-control" type="range" min="7.5" max="12" step="0.1" value="10">
-            <div class="control-row"><label for="line-height">行高</label><output id="line-height-value">1.50</output></div><input id="line-height" class="range-control" type="range" min="1.15" max="1.85" step="0.01" value="1.5">
-            <div class="control-row"><label for="section-gap">栏目间距</label><output id="section-gap-value">3.6 mm</output></div><input id="section-gap" class="range-control" type="range" min="1" max="8" step="0.1" value="3.6">
+          <div class="inspector-section layout-controls-section">
+            <div class="control-row layout-status-row"><h2>排版密度</h2><span id="layout-custom-badge" class="connection-badge">模板默认</span></div>
+            <div class="segmented-control full density-control" role="group" aria-label="排版密度">
+              <button type="button" data-density="compact">紧凑</button><button type="button" data-density="standard" class="active">标准</button><button type="button" data-density="spacious">舒展</button>
+            </div>
+            <div class="layout-control" data-layout-control="fontSize">
+              <div class="layout-control-heading"><label for="font-size">字号</label><span id="font-size-default" class="layout-default">默认 10.0 pt</span><button type="button" class="layout-reset" data-layout-reset="fontSize" title="还原字号" aria-label="还原字号"><i data-lucide="rotate-ccw"></i></button></div>
+              <div class="layout-control-inputs"><input id="font-size" class="range-control" type="range" min="7.5" max="12" step="0.1" value="10"><label class="numeric-input"><input id="font-size-number" type="number" min="7.5" max="12" step="0.1" inputmode="decimal" aria-label="字号数值"><span>pt</span></label></div>
+              <span id="font-size-error" class="field-error" aria-live="polite"></span>
+            </div>
+            <div class="layout-control" data-layout-control="lineHeight">
+              <div class="layout-control-heading"><label for="line-height">行高</label><span id="line-height-default" class="layout-default">默认 1.50</span><button type="button" class="layout-reset" data-layout-reset="lineHeight" title="还原行高" aria-label="还原行高"><i data-lucide="rotate-ccw"></i></button></div>
+              <div class="layout-control-inputs"><input id="line-height" class="range-control" type="range" min="1.15" max="1.85" step="0.01" value="1.5"><label class="numeric-input unitless"><input id="line-height-number" type="number" min="1.15" max="1.85" step="0.01" inputmode="decimal" aria-label="行高数值"></label></div>
+              <span id="line-height-error" class="field-error" aria-live="polite"></span>
+            </div>
+            <div class="layout-control" data-layout-control="sectionGap">
+              <div class="layout-control-heading"><label for="section-gap">栏目间距</label><span id="section-gap-default" class="layout-default">默认 3.6 mm</span><button type="button" class="layout-reset" data-layout-reset="sectionGap" title="还原栏目间距" aria-label="还原栏目间距"><i data-lucide="rotate-ccw"></i></button></div>
+              <div class="layout-control-inputs"><input id="section-gap" class="range-control" type="range" min="1" max="8" step="0.1" value="3.6"><label class="numeric-input"><input id="section-gap-number" type="number" min="1" max="8" step="0.1" inputmode="decimal" aria-label="栏目间距数值"><span>mm</span></label></div>
+              <span id="section-gap-error" class="field-error" aria-live="polite"></span>
+            </div>
+            <details class="advanced-settings layout-advanced"><summary>页边距与颜色</summary>
+              <div class="layout-control" data-layout-control="pageMarginX"><div class="layout-control-heading"><label for="page-margin-x">横向页边距</label><span id="page-margin-x-default" class="layout-default">默认 16.0 mm</span><button type="button" class="layout-reset" data-layout-reset="pageMarginX" title="还原横向页边距" aria-label="还原横向页边距"><i data-lucide="rotate-ccw"></i></button></div><div class="layout-control-inputs"><input id="page-margin-x" class="range-control" type="range" min="8" max="28" step="0.1" value="16"><label class="numeric-input"><input id="page-margin-x-number" type="number" min="8" max="28" step="0.1" inputmode="decimal" aria-label="横向页边距数值"><span>mm</span></label></div><span id="page-margin-x-error" class="field-error" aria-live="polite"></span></div>
+              <div class="layout-control" data-layout-control="pageMarginY"><div class="layout-control-heading"><label for="page-margin-y">纵向页边距</label><span id="page-margin-y-default" class="layout-default">默认 14.0 mm</span><button type="button" class="layout-reset" data-layout-reset="pageMarginY" title="还原纵向页边距" aria-label="还原纵向页边距"><i data-lucide="rotate-ccw"></i></button></div><div class="layout-control-inputs"><input id="page-margin-y" class="range-control" type="range" min="8" max="28" step="0.1" value="14"><label class="numeric-input"><input id="page-margin-y-number" type="number" min="8" max="28" step="0.1" inputmode="decimal" aria-label="纵向页边距数值"><span>mm</span></label></div><span id="page-margin-y-error" class="field-error" aria-live="polite"></span></div>
+              <div class="layout-control accent-control"><div class="layout-control-heading"><label for="accent-color-text">强调色</label><span id="accent-color-default" class="layout-default">模板默认</span><button type="button" class="layout-reset" data-layout-reset="accent" title="还原强调色" aria-label="还原强调色"><i data-lucide="rotate-ccw"></i></button></div><div class="color-inputs"><input id="accent-color" type="color" value="#176b5b" aria-label="选择强调色"><input id="accent-color-text" type="text" value="#176b5b" maxlength="7" autocomplete="off" spellcheck="false" aria-label="强调色十六进制值"></div><span id="accent-color-error" class="field-error" aria-live="polite"></span></div>
+            </details>
+            <button id="btn-reset-layout" class="inspector-command" type="button"><i data-lucide="rotate-ccw"></i>全部还原为当前模板</button>
           </div>
           <div class="inspector-section"><div class="control-row"><span>证件照</span><label class="switch"><input id="photo-toggle" type="checkbox"><span></span></label></div><button id="btn-photo" class="inspector-command" type="button"><i data-lucide="image-plus"></i>选择或调整照片</button></div>
         </section>
@@ -117,7 +142,7 @@
   <input id="photo-file-input" type="file" accept="image/jpeg,image/png,image/webp" hidden>
   <div id="modal-root" aria-live="polite"></div>
   <div id="toast-root" class="toast-root" aria-live="polite"></div>
-  <script id="embedded-resume-state" type="application/json">{}</script>
+  <template id="embedded-resume-state">{}</template>
   <!-- __SCRIPTS__ -->
 </body>
 </html>

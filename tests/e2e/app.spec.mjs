@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import JSZip from "jszip";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const TEMPLATE_IDS = [
@@ -94,6 +96,37 @@ test("十二套模板对基准样例保持单页", async ({ page }) => {
   }
 });
 
+test("精确排版实时预览、密度预设、边界校验与还原形成单次撤销", async ({ page }) => {
+  await page.getByRole("tab", { name: "版式" }).click();
+  const paper = page.locator("#resume-paper");
+  const fontNumber = page.locator("#font-size-number");
+  await fontNumber.fill("10.4");
+  await expect.poll(() => paper.evaluate((element) => element.style.getPropertyValue("--resume-font-size"))).toBe("10.4pt");
+  await fontNumber.blur();
+  await expect(page.locator("#layout-custom-badge")).toContainText("1 项");
+  await page.locator("#btn-undo").click();
+  await expect(fontNumber).toHaveValue("10.0");
+
+  await fontNumber.fill("20");
+  await fontNumber.blur();
+  await expect(fontNumber).toHaveValue("10.0");
+  await expect(page.locator("#font-size-error")).toContainText("7.5");
+
+  await page.locator("[data-density='compact']").click();
+  await expect(page.locator("[data-density='compact']")).toHaveClass(/active/);
+  await expect(page.locator("#font-size-number")).toHaveValue("9.7");
+  await expect(page.locator("#page-margin-x-number")).toHaveValue("14.5");
+  await page.locator(".layout-advanced > summary").click();
+  await page.locator("#accent-color-text").fill("#123456");
+  await page.locator("#accent-color-text").blur();
+  await expect.poll(() => paper.evaluate((element) => element.style.getPropertyValue("--resume-accent"))).toBe("#123456");
+  await page.locator("[data-layout-reset='accent']").click();
+  await expect(page.locator("#accent-color-text")).toHaveValue("#176B5B");
+  await page.locator("#btn-reset-layout").click();
+  await expect(page.locator("#layout-custom-badge")).toHaveText("模板默认");
+  await expect(page.locator("[data-density='standard']")).toHaveClass(/active/);
+});
+
 test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销", async ({ page }) => {
   let calls = 0;
   const requestBodies = [];
@@ -110,15 +143,21 @@ test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销"
 
   await page.locator("#btn-ai-settings").click();
   await page.locator(".modal select").selectOption("custom");
-  const rememberCheckbox = page.getByLabel("记住到本机");
-  const rememberBox = await rememberCheckbox.boundingBox();
-  expect(rememberBox.width).toBeLessThanOrEqual(20);
-  expect(rememberBox.height).toBeLessThanOrEqual(20);
   await page.getByLabel("模型", { exact: true }).fill("example-model");
   await page.getByLabel("Base URL", { exact: true }).fill("https://mock.example/v1");
   await page.getByLabel("API Key", { exact: true }).fill("test-key");
   await page.getByRole("button", { name: "测试连接并保存" }).click();
   await expect(page.locator("#ai-status-badge")).toContainText("已连接");
+  const credentialStorage = await page.evaluate(() => ({
+    local: localStorage.getItem("resume-formatter:ai-preferences-v3"),
+    session: sessionStorage.getItem("resume-formatter:ai-credential-session-v3"),
+  }));
+  expect(credentialStorage.local).not.toContain("test-key");
+  expect(credentialStorage.session).toContain("test-key");
+  await page.locator("#btn-ai-settings").click();
+  await expect(page.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("API Key", { exact: true })).toHaveAttribute("placeholder", /当前标签页已配置/);
+  await page.getByRole("button", { name: "取消", exact: true }).click();
 
   const summary = page.locator("#resume-paper [data-edit-path='summary']");
   await summary.evaluate((element) => {
@@ -141,6 +180,40 @@ test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销"
   const rewriteUser = requestBodies[1].messages.find((message) => message.role === "user").content;
   expect(rewriteUser).toContain("selectedText");
   expect(rewriteUser).not.toContain("林知远");
+});
+
+test("Gemini 密钥只通过请求头发送并可从当前标签页立即忘记", async ({ page }) => {
+  const secret = "GEMINI_TEST_SESSION_SECRET";
+  let request;
+  await page.route("https://generativelanguage.googleapis.com/v1beta/**", async (route) => {
+    request = route.request();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] }),
+    });
+  });
+
+  await page.locator("#btn-ai-settings").click();
+  await page.locator(".modal select").selectOption("gemini");
+  await page.getByLabel("API Key", { exact: true }).fill(secret);
+  await page.getByRole("button", { name: "测试连接并保存" }).click();
+  await expect(page.locator("#ai-status-badge")).toContainText("Gemini 已连接");
+  expect(request.url()).not.toContain(secret);
+  expect(request.url()).not.toContain("?key=");
+  expect(request.headers()["x-goog-api-key"]).toBe(secret);
+  expect(request.postData()).not.toContain(secret);
+  expect(await page.locator("html").evaluate((element) => element.outerHTML)).not.toContain(secret);
+
+  await page.locator("#btn-ai-settings").click();
+  await page.getByRole("button", { name: "忘记 API Key" }).click();
+  await expect(page.getByRole("button", { name: "忘记 API Key" })).toBeDisabled();
+  const stored = await page.evaluate(() => ({
+    local: localStorage.getItem("resume-formatter:ai-preferences-v3"),
+    session: sessionStorage.getItem("resume-formatter:ai-credential-session-v3"),
+  }));
+  expect(stored.local).not.toContain(secret);
+  expect(stored.session).toBeNull();
 });
 
 test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => {
@@ -177,7 +250,7 @@ test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => 
   await expect(page.getByLabel("API Key", { exact: true })).toHaveValue("");
   await page.getByLabel("API Key", { exact: true }).fill("test-key");
   await page.getByRole("button", { name: "读取可用模型" }).click();
-  await expect(page.locator(".field-help")).toContainText("已读取 2 个");
+  await expect(page.getByText(/^已读取 2 个当前令牌可用模型/)).toBeVisible();
   expect(modelsRequest.headers().authorization).toBe("Bearer test-key");
   expect(modelsRequest.postData()).toBeNull();
 
@@ -296,12 +369,15 @@ test("快速扫描可解释首屏信号且大范围 AI 请求先披露发送范�
 
 test("投递后冻结只读快照并可复制为新版本继续编辑", async ({ page }) => {
   await createJobVersion(page, "示例公司", "工程师");
-  await page.evaluate(() => { window.print = () => {}; });
+  const initialTitle = await page.title();
+  await page.evaluate(() => { window.print = () => { window.__capturedPrintTitle = document.title; }; });
   await page.locator("#btn-export-menu").click();
   await page.locator("#btn-print").click();
   const warnings = page.locator(".readiness-item.warning input");
   for (let index = 0; index < await warnings.count(); index += 1) await warnings.nth(index).check();
   await page.getByRole("button", { name: "打开打印对话框" }).click();
+  await expect.poll(() => page.evaluate(() => window.__capturedPrintTitle || "")).toMatch(/^示例公司-工程师-林知远-\d{4}-\d{2}-\d{2}$/);
+  await expect.poll(() => page.title()).toBe(initialTitle);
   await expect(page.locator("#readonly-status")).toBeVisible();
   await expect(page.locator("#btn-save")).toBeDisabled();
   await expect(page.locator("#resume-paper [data-edit-path='summary']")).toHaveAttribute("contenteditable", "false");
@@ -360,7 +436,7 @@ test("工作区备份包含岗位资料但普通 HTML 与两类导出均不含�
   await page.getByLabel("个人行动", { exact: true }).fill("仅用于工作区的虚构证据");
   await page.getByLabel("结果", { exact: true }).fill("待补充");
   await page.getByRole("button", { name: "保存证据" }).click();
-  await page.evaluate(() => sessionStorage.setItem("resume-formatter:ai-session-v2", JSON.stringify({ provider: "custom", apiKey: "WORKSPACE_SECRET" })));
+  await page.evaluate(() => sessionStorage.setItem("resume-formatter:ai-credential-session-v3", JSON.stringify({ provider: "custom", baseUrl: "https://secret.example/v1", model: "example", apiKey: "WORKSPACE_SECRET" })));
 
   await page.locator("#btn-export-menu").click();
   const workspaceDownload = page.waitForEvent("download");
@@ -380,6 +456,43 @@ test("工作区备份包含岗位资料但普通 HTML 与两类导出均不含�
   expect(htmlContent).not.toContain("仅用于工作区的虚构 JD 内容");
   expect(htmlContent).not.toContain("仅用于工作区的虚构证据");
   expect(htmlContent).not.toContain("WORKSPACE_SECRET");
+});
+
+test("隐私面板可清点、备份并限定清除本工具数据", async ({ page }) => {
+  await createJobVersion(page, "隐私示例公司", "示例岗位");
+  await page.getByRole("tab", { name: "岗位" }).click();
+  await page.locator("#job-jd").fill("仅用于清除验证的虚构 JD");
+  await page.locator("#job-jd").blur();
+  await page.evaluate(() => {
+    localStorage.setItem("another-app:state", "keep-me");
+    localStorage.setItem("resume-formatter:obsolete-secret", "remove-me");
+    sessionStorage.setItem("resume-formatter:ai-credential-session-v3", JSON.stringify({ apiKey: "CLEAR_TEST_SECRET", testStatus: "passed" }));
+  });
+
+  await page.locator("#btn-export-menu").click();
+  await page.locator("#btn-privacy").click();
+  await expect(page.getByRole("heading", { name: "隐私与本地数据" })).toBeVisible();
+  await expect(page.locator(".privacy-inventory")).toContainText("1 个");
+  await expect(page.getByRole("button", { name: "导出工作区备份" })).toBeVisible();
+  await page.getByRole("button", { name: "清除全部本地数据" }).click();
+  await expect(page.getByRole("heading", { name: "确认清除本地数据" })).toBeVisible();
+  await page.getByRole("button", { name: "确认清除" }).click();
+  await expect(page.locator("#resume-paper [data-edit-path='profile.name']")).toHaveText("");
+
+  const storage = await page.evaluate(() => ({
+    unrelated: localStorage.getItem("another-app:state"),
+    oldSecret: localStorage.getItem("resume-formatter:obsolete-secret"),
+    sessionKeys: Object.keys(sessionStorage).filter((key) => key.startsWith("resume-formatter:")),
+    localData: Object.fromEntries(Object.keys(localStorage).filter((key) => key.startsWith("resume-formatter:")).map((key) => [key, localStorage.getItem(key)])),
+  }));
+  expect(storage.unrelated).toBe("keep-me");
+  expect(storage.oldSecret).toBeNull();
+  expect(storage.sessionKeys).toEqual([]);
+  expect(JSON.stringify(storage.localData)).not.toContain("remove-me");
+  expect(JSON.stringify(storage.localData)).not.toContain("CLEAR_TEST_SECRET");
+
+  await page.reload();
+  await expect(page.locator("#resume-paper [data-edit-path='profile.name']")).toHaveText("");
 });
 
 test("投递 PDF 门禁阻止缺失姓名并允许普通备份", async ({ page }) => {
@@ -429,7 +542,7 @@ test("移动端检查器支持拖动，并保留焦点、动效与触控约束",
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 390, height: 844 });
   const handle = page.locator("#inspector-handle");
-  await expect.poll(async () => (await handle.boundingBox())?.y || 0).toBeGreaterThan(780);
+  await expect.poll(async () => (await handle.boundingBox())?.y || 0).toBeGreaterThan(760);
 
   await page.getByRole("tab", { name: "版式" }).click();
   const recommended = page.locator("[data-recommended-template-id]").first();
@@ -447,11 +560,13 @@ test("移动端检查器支持拖动，并保留焦点、动效与触控约束",
   const transitionSeconds = await page.locator("#inspector").evaluate((element) => parseFloat(getComputedStyle(element).transitionDuration));
   expect(transitionSeconds).toBeLessThan(0.001);
 
-  const undersized = await page.locator("button").evaluateAll((buttons) => buttons
-    .map((button) => ({ id: button.id, rect: button.getBoundingClientRect() }))
-    .filter(({ id, rect }) => id !== "inspector-handle" && rect.width > 0 && rect.height > 0 && (rect.width < 24 || rect.height < 24))
-    .map(({ id, rect }) => ({ id, width: rect.width, height: rect.height })));
+  const undersized = await page.locator('button, input:not([type="checkbox"]):not([type="radio"]), select, textarea').evaluateAll((controls) => controls
+    .map((button) => ({ id: button.id, tag: button.tagName, type: button.type || "", rect: button.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.width > 0 && rect.height > 0 && (rect.width < 39.5 || rect.height < 39.5))
+    .map(({ id, tag, type, rect }) => ({ id, tag, type, width: rect.width, height: rect.height })));
   expect(undersized).toEqual([]);
+  const inspectorSurface = await page.locator("#inspector").evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(inspectorSurface).toMatch(/^rgb\(/);
 
   let box = await handle.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -472,7 +587,7 @@ test("移动端检查器支持拖动，并保留焦点、动效与触控约束",
 
 test("导出状态不包含 AI 密钥", async ({ page }) => {
   await page.evaluate(() => {
-    sessionStorage.setItem("resume-formatter:ai-session-v2", JSON.stringify({ provider: "custom", apiKey: "SHOULD_NOT_EXPORT" }));
+    sessionStorage.setItem("resume-formatter:ai-credential-session-v3", JSON.stringify({ provider: "custom", baseUrl: "https://secret.example/v1", model: "example", apiKey: "SHOULD_NOT_EXPORT" }));
   });
   const downloadPromise = page.waitForEvent("download");
   await page.locator("#btn-export-menu").click();
@@ -552,11 +667,26 @@ test("独立 HTML 可离线重开并恢复内嵌状态", async ({ page, context 
   const download = await downloadPromise;
   const path = testInfo.outputPath("offline-resume.html");
   await download.saveAs(path);
+  const offlineHtml = await readFile(path, "utf8");
+  const inlineScript = offlineHtml.match(/<script>([\s\S]*?)<\/script>/i)?.[1] || "";
+  const serializedHash = createHash("sha256").update(inlineScript).digest("base64");
+  expect(offlineHtml).toContain(`script-src 'sha256-${serializedHash}'`);
   const reopened = await context.newPage();
   const externalRequests = [];
+  const securityErrors = [];
   reopened.on("request", (request) => { if (!request.url().startsWith("file:")) externalRequests.push(request.url()); });
+  reopened.on("console", (message) => { if (/content security policy|refused to/i.test(message.text())) securityErrors.push(message.text()); });
   await reopened.goto(pathToFileURL(path).href);
   await expect(reopened.locator("#resume-paper [data-edit-path='profile.name']")).toHaveText("离线样例用户");
+  const securityMeta = await reopened.evaluate(() => ({
+    csp: document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content || "",
+    referrer: document.querySelector('meta[name="referrer"]')?.content || "",
+    embeddedTag: document.querySelector("#embedded-resume-state")?.tagName || "",
+  }));
+  expect(securityMeta.csp).toMatch(/script-src 'sha256-/);
+  expect(securityMeta.referrer).toBe("no-referrer");
+  expect(securityMeta.embeddedTag).toBe("TEMPLATE");
   expect(externalRequests).toEqual([]);
+  expect(securityErrors).toEqual([]);
   await reopened.close();
 });

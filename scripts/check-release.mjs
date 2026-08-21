@@ -45,6 +45,10 @@ const html = readFileSync(join(root, "index.html"), "utf8");
 if (/(?:src|href)=["']https?:\/\//i.test(html)) failures.push("index.html: 发现外部运行时资源");
 if (!html.includes('id="embedded-resume-state"')) failures.push("index.html: 缺少离线文档嵌入点");
 if (!html.includes("sessionStorage") || !html.includes("localStorage")) failures.push("index.html: 缺少已声明的本地配置存储实现");
+if (!/Content-Security-Policy[^>]+script-src 'sha256-[A-Za-z0-9+/=]+'/i.test(html)) failures.push("index.html: 缺少构建哈希 CSP");
+if (!html.includes('name="referrer" content="no-referrer"')) failures.push("index.html: 缺少 no-referrer 策略");
+if (!html.includes('<template id="embedded-resume-state">')) failures.push("index.html: 离线状态必须使用惰性 template");
+if (/connect-src[^;]*\[::1\]/i.test(html)) failures.push("index.html: Chromium 不接受 CSP 中的 IPv6 字面量，应由 AI 配置规范化为 localhost");
 
 const networkApis = ["fetch(", "XMLHttpRequest", "WebSocket(", "sendBeacon("];
 for (const relativePath of publishable.filter((path) =>
@@ -56,9 +60,18 @@ for (const relativePath of publishable.filter((path) =>
 }
 const aiSource = readFileSync(join(root, "src/v2/ai.js"), "utf8");
 if (!aiSource.includes("fetchImpl")) failures.push("src/v2/ai.js: 缺少可测试的网络适配边界");
+if (!aiSource.includes('"x-goog-api-key"') || /generateContent\?key/.test(aiSource)) failures.push("src/v2/ai.js: Gemini 密钥必须只通过请求头发送");
+if (!aiSource.includes("createAIProviderPreferences") || !aiSource.includes("createAICredentialSession")) failures.push("src/v2/ai.js: AI 偏好与会话凭据必须使用独立合同");
+if (/\bremember\b/.test(aiSource)) failures.push("src/v2/ai.js: 不得恢复长期明文凭据策略");
 if (/apiKey/.test(readFileSync(join(root, "src/v2/contracts.js"), "utf8"))) failures.push("src/v2/contracts.js: 凭据不得进入简历合同");
 const workspaceSource = readFileSync(join(root, "src/v2/workspace.js"), "utf8");
-if (!workspaceSource.includes("createWorkspaceBackup") || !workspaceSource.includes("stripCredentials")) failures.push("src/v2/workspace.js: 工作区备份缺少凭据剥离边界");
+if (!workspaceSource.includes("createWorkspaceBackup") || !workspaceSource.includes("stripSensitiveData")) failures.push("src/v2/workspace.js: 工作区备份缺少凭据剥离边界");
+const appSource = readFileSync(join(root, "src/v2/app.js"), "utf8");
+if (!appSource.includes("safeResumeDocument") || !appSource.includes("clearResumeFormatterStorage")) failures.push("src/v2/app.js: 普通导出或本地清理缺少隐私边界");
+const privacySource = readFileSync(join(root, "src/v2/privacy.js"), "utf8");
+if (!privacySource.includes('key.startsWith(STORAGE_PREFIX)') || /\.clear\(\)/.test(privacySource)) failures.push("src/v2/privacy.js: 本地清理必须限定 resume-formatter 前缀");
+const stylesSource = readFileSync(join(root, "src/styles/v2.css"), "utf8");
+if (!stylesSource.includes("prefers-reduced-transparency") || !stylesSource.includes("#fafbf9")) failures.push("src/styles/v2.css: 缺少移动检查器实色或 reduced-transparency 支持");
 
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
