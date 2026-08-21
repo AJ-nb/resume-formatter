@@ -63,6 +63,7 @@
         <div id="canvas-bar">
           <div id="overflow-status" class="status-pill" data-status="ok"><i data-lucide="circle-check"></i><span>单页内</span></div>
           <button id="btn-auto-fit" class="quiet-button" type="button" hidden><i data-lucide="wand-sparkles"></i>自动适配</button>
+          <div id="readonly-status" class="readonly-status" hidden><i data-lucide="lock-keyhole"></i><span>已投递快照</span><button id="btn-copy-snapshot" type="button">复制继续</button></div>
           <div class="canvas-spacer"></div>
           <label class="zoom-control"><i data-lucide="zoom-out"></i><input id="zoom-slider" type="range" min="50" max="130" value="92" step="2" aria-label="预览缩放"><output id="zoom-value">92%</output></label>
         </div>
@@ -96,13 +97,14 @@
           <div id="job-empty" class="inspector-section job-empty"><i data-lucide="briefcase-business"></i><h2>从母版创建岗位版本</h2><p>岗位信息、JD 与证据只保存在本机工作区，不进入普通简历导出。</p><button id="btn-create-job-empty" class="inspector-command strong" type="button"><i data-lucide="plus"></i>创建岗位版本</button></div>
           <div id="job-workspace" hidden>
             <div class="inspector-section"><div class="control-row"><h2>岗位任务</h2><span id="job-status" class="connection-badge">草稿</span></div><label class="inspector-field"><span>公司</span><input id="job-company" class="inspector-input" autocomplete="organization"></label><label class="inspector-field"><span>岗位</span><input id="job-role" class="inspector-input"></label><label class="inspector-field"><span>语言</span><select id="job-language" class="inspector-select"><option value="zh-CN">中文</option><option value="en">English</option></select></label><label class="inspector-field"><span>来源备注</span><input id="job-source-note" class="inspector-input" placeholder="招聘页面、内推或更新时间"></label></div>
+            <div class="inspector-section"><div class="control-row"><h2>版本协作</h2><span id="master-sync-badge" class="connection-badge">已同步</span></div><div class="job-version-actions"><button id="btn-compare-master" class="inspector-command" type="button"><i data-lucide="git-compare-arrows"></i>对比母版</button><button id="btn-sync-master" class="inspector-command strong" type="button"><i data-lucide="refresh-cw"></i>同步母版</button><button id="btn-copy-application" class="inspector-command" type="button"><i data-lucide="copy-plus"></i>复制为新版本</button></div><div class="export-history"><div class="control-row"><h2>导出记录</h2><span id="export-history-count" class="field-count">0 次</span></div><div id="export-history-list"></div></div></div>
             <div class="inspector-section"><div class="control-row"><h2>岗位描述</h2><span id="job-jd-count" class="field-count">0 字</span></div><textarea id="job-jd" class="inspector-textarea" placeholder="粘贴完整 JD，仅保存在当前设备"></textarea><button id="btn-analyze-jd" class="inspector-command strong" type="button"><i data-lucide="scan-search"></i>本地分析要求</button><button id="btn-jd-compare" class="inspector-command" type="button"><i data-lucide="sparkles"></i>AI 补充对照</button></div>
             <div class="inspector-section"><div class="control-row"><h2>事实证据</h2><button id="btn-add-evidence" class="text-link" type="button">添加</button></div><div id="evidence-list" class="evidence-list"></div></div>
             <div class="inspector-section"><h2>要求匹配</h2><div id="requirement-list" class="requirement-list"></div></div>
           </div>
         </section>
         <section id="inspector-checks" class="inspector-panel">
-          <div class="inspector-section checks-heading"><div class="control-row"><h2>投递检查</h2><span id="check-summary" class="connection-badge">检查中</span></div><p>确定性规则与 AI 建议分开显示，不代表真实 ATS 通过率。</p><button id="btn-review-resume" class="inspector-command" type="button"><i data-lucide="sparkles"></i>AI 全文审阅</button></div>
+          <div class="inspector-section checks-heading"><div class="control-row"><h2>投递检查</h2><span id="check-summary" class="connection-badge">检查中</span></div><p>确定性规则与 AI 建议分开显示，不代表真实 ATS 通过率。</p><button id="btn-quick-scan" class="inspector-command strong" type="button"><i data-lucide="scan-eye"></i>快速扫描</button><button id="btn-review-resume" class="inspector-command" type="button"><i data-lucide="sparkles"></i>AI 全文审阅</button></div>
           <div id="readability-checks" class="check-list"></div>
           <div class="inspector-section ai-status-section"><div class="control-row"><h2>AI 建议</h2><span id="ai-status-badge" class="connection-badge">未配置</span></div><p>AI 失败不会影响本地检查、证据与导出备份。</p></div>
           <div id="ai-results" class="ai-results" aria-live="polite"></div>

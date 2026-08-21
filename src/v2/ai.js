@@ -114,6 +114,18 @@ export function redactConfig(config) {
   return safe;
 }
 
+export function createAIRequestDisclosure(config, textType, content) {
+  const value = normalizeAIConfig(config);
+  const text = Array.isArray(content) ? content.map((item) => String(item || "")).join("\n") : String(content || "");
+  return {
+    provider: value.provider,
+    providerName: AI_PROVIDERS[value.provider].name,
+    model: value.model,
+    textType: String(textType || "文本"),
+    characterCount: text.length,
+  };
+}
+
 export function loadAIConfig(session = globalThis.sessionStorage, local = globalThis.localStorage) {
   for (const storage of [session, local]) {
     try {

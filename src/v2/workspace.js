@@ -33,6 +33,16 @@ function now() {
   return new Date().toISOString();
 }
 
+function sameValue(left, right) {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function copyValue(value) {
+  return value === undefined ? undefined : clone(value);
+}
+
 function normalizeLanguage(value) {
   return ["zh-CN", "en"].includes(value) ? value : "zh-CN";
 }
@@ -130,6 +140,9 @@ export function createApplicationRecord(input = {}) {
     exportRecords: Array.isArray(input.exportRecords) ? clone(input.exportRecords) : [],
     confirmations: Array.isArray(input.confirmations) ? [...new Set(input.confirmations.map(String))] : [],
     status: ["draft", "ready", "applied", "archived"].includes(input.status) ? input.status : "draft",
+    parentApplicationId: String(input.parentApplicationId || ""),
+    lastMasterSyncAt: input.lastMasterSyncAt || null,
+    submittedAt: input.submittedAt || null,
     createdAt: input.createdAt || timestamp,
     updatedAt: input.updatedAt || timestamp,
   };
@@ -329,6 +342,188 @@ export function recommendTemplates(document, application = {}) {
   }).sort((left, right) => right.score - left.score || left.templateId.localeCompare(right.templateId)).slice(0, 3);
 }
 
+const PROFILE_LABELS = Object.freeze({
+  name: "姓名",
+  headline: "求职方向",
+  location: "所在地",
+  phone: "电话",
+  email: "邮箱",
+  website: "网站",
+  github: "GitHub",
+});
+
+function orderedIds(...lists) {
+  const ids = [];
+  for (const list of lists) {
+    for (const item of list || []) if (item?.id && !ids.includes(item.id)) ids.push(item.id);
+  }
+  return ids;
+}
+
+function byId(list, id) {
+  return (list || []).find((item) => item.id === id);
+}
+
+function syncChange(path, label, entityType, baselineValue, masterValue, jobValue) {
+  const status = sameValue(jobValue, baselineValue) ? "auto" : "conflict";
+  return {
+    id: `master-sync-${stableAssetHash(path).slice(8, 24)}`,
+    path,
+    label,
+    entityType,
+    kind: masterValue === undefined ? "remove" : baselineValue === undefined ? "add" : "update",
+    status,
+    baselineValue: copyValue(baselineValue),
+    masterValue: copyValue(masterValue),
+    jobValue: copyValue(jobValue),
+  };
+}
+
+function compareSyncValue(changes, path, label, entityType, baselineValue, masterValue, jobValue) {
+  if (sameValue(masterValue, baselineValue) || sameValue(jobValue, masterValue)) return;
+  changes.push(syncChange(path, label, entityType, baselineValue, masterValue, jobValue));
+}
+
+function compareEntity(changes, path, label, entityType, baselineValue, masterValue, jobValue) {
+  if (baselineValue && masterValue && jobValue) return true;
+  compareSyncValue(changes, path, label, entityType, baselineValue, masterValue, jobValue);
+  return false;
+}
+
+export function createMasterSyncPlan(baselineInput, masterInput, jobInput) {
+  const baseline = migrateDocument(baselineInput);
+  const master = migrateDocument(masterInput);
+  const job = migrateDocument(jobInput);
+  const changes = [];
+
+  for (const key of Object.keys(PROFILE_LABELS)) {
+    compareSyncValue(changes, `profile.${key}`, PROFILE_LABELS[key], "field", baseline.profile?.[key], master.profile?.[key], job.profile?.[key]);
+  }
+  compareSyncValue(changes, "summary", "个人摘要", "field", baseline.summary, master.summary, job.summary);
+  compareSyncValue(changes, "assets.photo", "证件照", "field", baseline.assets?.photo, master.assets?.photo, job.assets?.photo);
+
+  for (const sectionId of orderedIds(master.sections, baseline.sections, job.sections)) {
+    const baselineSection = byId(baseline.sections, sectionId);
+    const masterSection = byId(master.sections, sectionId);
+    const jobSection = byId(job.sections, sectionId);
+    const sectionLabel = masterSection?.title || jobSection?.title || baselineSection?.title || "栏目";
+    const sectionPath = `sections.${sectionId}`;
+    if (!compareEntity(changes, sectionPath, sectionLabel, "section", baselineSection, masterSection, jobSection)) continue;
+    compareSyncValue(changes, `${sectionPath}.title`, `${sectionLabel} · 栏目名称`, "field", baselineSection.title, masterSection.title, jobSection.title);
+    compareSyncValue(changes, `${sectionPath}.type`, `${sectionLabel} · 栏目类型`, "field", baselineSection.type, masterSection.type, jobSection.type);
+
+    for (const entryId of orderedIds(masterSection.entries, baselineSection.entries, jobSection.entries)) {
+      const baselineEntry = byId(baselineSection.entries, entryId);
+      const masterEntry = byId(masterSection.entries, entryId);
+      const jobEntry = byId(jobSection.entries, entryId);
+      const entryLabel = masterEntry?.name || masterEntry?.role || jobEntry?.name || baselineEntry?.name || "条目";
+      const entryPath = `${sectionPath}.entries.${entryId}`;
+      if (!compareEntity(changes, entryPath, `${sectionLabel} · ${entryLabel}`, "entry", baselineEntry, masterEntry, jobEntry)) continue;
+      for (const [key, label] of [["name", "名称"], ["role", "角色"], ["date", "日期"], ["location", "地点"], ["summary", "说明"]]) {
+        compareSyncValue(changes, `${entryPath}.${key}`, `${sectionLabel} · ${entryLabel} · ${label}`, "field", baselineEntry[key], masterEntry[key], jobEntry[key]);
+      }
+
+      for (const bulletId of orderedIds(masterEntry.bullets, baselineEntry.bullets, jobEntry.bullets)) {
+        const baselineBullet = byId(baselineEntry.bullets, bulletId);
+        const masterBullet = byId(masterEntry.bullets, bulletId);
+        const jobBullet = byId(jobEntry.bullets, bulletId);
+        const bulletPath = `${entryPath}.bullets.${bulletId}`;
+        const bulletLabel = `${sectionLabel} · ${entryLabel} · ${(masterBullet?.text || jobBullet?.text || baselineBullet?.text || "Bullet").slice(0, 28)}`;
+        if (!compareEntity(changes, bulletPath, bulletLabel, "bullet", baselineBullet, masterBullet, jobBullet)) continue;
+        compareSyncValue(changes, `${bulletPath}.text`, bulletLabel, "field", baselineBullet.text, masterBullet.text, jobBullet.text);
+      }
+    }
+  }
+
+  return {
+    planVersion: 1,
+    createdAt: now(),
+    baselineDocumentId: baseline.documentId,
+    masterDocumentId: master.documentId,
+    jobDocumentId: job.documentId,
+    autoUpdates: changes.filter((item) => item.status === "auto"),
+    conflicts: changes.filter((item) => item.status === "conflict"),
+    changeCount: changes.length,
+  };
+}
+
+function resolvePath(document, path) {
+  const parts = path.split(".");
+  let current = document;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const part = parts[index];
+    if (part === "sections") current = byId(current.sections, parts[++index]);
+    else if (part === "entries") current = byId(current.entries, parts[++index]);
+    else if (part === "bullets") current = byId(current.bullets, parts[++index]);
+    else current = current?.[part];
+    if (!current) throw new Error(`母版同步字段不存在：${path}`);
+  }
+  return { parent: current, key: parts.at(-1) };
+}
+
+function masterOrderedInsert(target, value, masterList) {
+  const masterIndex = masterList.findIndex((item) => item.id === value.id);
+  const nextMasterId = masterList.slice(masterIndex + 1).find((item) => target.some((candidate) => candidate.id === item.id))?.id;
+  const targetIndex = nextMasterId ? target.findIndex((item) => item.id === nextMasterId) : target.length;
+  target.splice(targetIndex, 0, clone(value));
+}
+
+function applyEntityChange(document, master, change) {
+  const parts = change.path.split(".");
+  let target;
+  let masterList;
+  if (change.entityType === "section") {
+    target = document.sections;
+    masterList = master.sections;
+  } else if (change.entityType === "entry") {
+    const sectionId = parts[1];
+    target = byId(document.sections, sectionId)?.entries;
+    masterList = byId(master.sections, sectionId)?.entries || [];
+  } else {
+    const sectionId = parts[1];
+    const entryId = parts[3];
+    target = byId(byId(document.sections, sectionId)?.entries, entryId)?.bullets;
+    masterList = byId(byId(master.sections, sectionId)?.entries, entryId)?.bullets || [];
+  }
+  if (!target) throw new Error(`母版同步结构不存在：${change.path}`);
+  const entityId = parts.at(-1);
+  const index = target.findIndex((item) => item.id === entityId);
+  if (change.masterValue === undefined) {
+    if (index >= 0) target.splice(index, 1);
+  } else if (index >= 0) {
+    target[index] = clone(change.masterValue);
+  } else {
+    masterOrderedInsert(target, change.masterValue, masterList);
+  }
+}
+
+function applySyncChange(document, master, change) {
+  if (change.entityType !== "field") return applyEntityChange(document, master, change);
+  const { parent, key } = resolvePath(document, change.path);
+  parent[key] = copyValue(change.masterValue);
+}
+
+export function applyMasterSyncPlan(jobInput, masterInput, plan, resolutions = {}) {
+  const document = migrateDocument(clone(jobInput));
+  const master = migrateDocument(masterInput);
+  for (const conflict of plan.conflicts || []) {
+    if (!["master", "job"].includes(resolutions[conflict.id])) throw new Error(`需要选择如何处理：${conflict.label}`);
+  }
+  const selected = [
+    ...(plan.autoUpdates || []),
+    ...(plan.conflicts || []).filter((item) => resolutions[item.id] === "master"),
+  ];
+  const order = (item) => item.entityType === "field" ? 2 : item.kind === "remove" ? 0 : 1;
+  selected.sort((left, right) => order(left) - order(right));
+  for (const change of selected) applySyncChange(document, master, change);
+  document.metadata.updatedAt = now();
+  return {
+    document,
+    appliedChanges: selected.map((item) => item.id),
+    keptChanges: (plan.conflicts || []).filter((item) => resolutions[item.id] === "job").map((item) => item.id),
+  };
+}
+
 export class ApplicationWorkspaceStore {
   constructor(storage = globalThis.localStorage) {
     this.storage = storage ? safeStorage(storage) : null;
@@ -383,7 +578,12 @@ export class ApplicationWorkspaceStore {
   setActiveDocument(document, { persist = true } = {}) {
     const record = this.getActiveRecord();
     if (!record) throw new Error("活动文档不存在。");
-    record.document = dehydrateDocumentAssets(document, this.workspace.assets);
+    const nextDocument = dehydrateDocumentAssets(document, this.workspace.assets);
+    if (record.status === "frozen") {
+      if (!sameValue(record.document, nextDocument)) throw new Error("已投递版本是只读快照，请复制后继续修改。");
+      return false;
+    }
+    record.document = nextDocument;
     record.title = document.resumeName || record.title;
     record.updatedAt = now();
     if (record.kind === "master") this.workspace.masterDocumentId = record.id;
@@ -411,6 +611,62 @@ export class ApplicationWorkspaceStore {
       "application",
       { applicationId, title: document.resumeName },
     );
+    this.workspace.applications.push(application);
+    this.workspace.activeDocumentId = document.documentId;
+    this.persist();
+    return application;
+  }
+
+  previewMasterSync(applicationId) {
+    const application = this.workspace.applications.find((item) => item.id === applicationId);
+    const record = application ? this.workspace.documents[application.documentId] : null;
+    if (!application || !record) throw new Error("岗位任务不存在。");
+    return createMasterSyncPlan(application.masterBaseline || this.getMasterDocument(), this.getMasterDocument(), hydrateDocumentAssets(record.document, this.workspace.assets));
+  }
+
+  syncApplicationWithMaster(applicationId, resolutions = {}) {
+    const application = this.workspace.applications.find((item) => item.id === applicationId);
+    const record = application ? this.workspace.documents[application.documentId] : null;
+    if (!application || !record) throw new Error("岗位任务不存在。");
+    if (record.status === "frozen") throw new Error("已投递版本不可同步，请复制后继续修改。");
+    const master = this.getMasterDocument();
+    const plan = this.previewMasterSync(applicationId);
+    const result = applyMasterSyncPlan(hydrateDocumentAssets(record.document, this.workspace.assets), master, plan, resolutions);
+    record.document = dehydrateDocumentAssets(result.document, this.workspace.assets);
+    record.updatedAt = now();
+    application.masterBaseline = clone(master);
+    application.lastMasterSyncAt = now();
+    application.updatedAt = now();
+    this.persist();
+    return { ...result, plan };
+  }
+
+  copyApplication(applicationId) {
+    const source = this.workspace.applications.find((item) => item.id === applicationId);
+    const sourceRecord = source ? this.workspace.documents[source.documentId] : null;
+    if (!source || !sourceRecord) throw new Error("岗位任务不存在。");
+    const applicationIdNext = createId("application");
+    const document = hydrateDocumentAssets(sourceRecord.document, this.workspace.assets);
+    document.documentId = createId("resume");
+    document.resumeName = `${document.resumeName || sourceRecord.title || "岗位版本"} - 继续编辑`;
+    document.metadata.createdAt = now();
+    document.metadata.updatedAt = now();
+    const application = createApplicationRecord({
+      ...source,
+      id: applicationIdNext,
+      documentId: document.documentId,
+      status: "draft",
+      parentApplicationId: source.id,
+      masterBaseline: source.masterBaseline || this.getMasterDocument(),
+      exportRecords: [],
+      submittedAt: null,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    this.workspace.documents[document.documentId] = documentRecord(dehydrateDocumentAssets(document, this.workspace.assets), "application", {
+      applicationId: application.id,
+      title: document.resumeName,
+    });
     this.workspace.applications.push(application);
     this.workspace.activeDocumentId = document.documentId;
     this.persist();
@@ -459,11 +715,16 @@ export class ApplicationWorkspaceStore {
   recordExport(type, details = {}) {
     const application = this.getActiveApplication();
     if (!application) return null;
-    const record = { id: createId("export"), type, createdAt: now(), ...clone(details) };
-    application.exportRecords.unshift(record);
-    if (type === "pdf") application.status = "applied";
+    const exportRecord = { id: createId("export"), type, createdAt: now(), ...clone(details) };
+    application.exportRecords.unshift(exportRecord);
+    if (type === "pdf") {
+      application.status = "applied";
+      application.submittedAt = exportRecord.createdAt;
+      const documentRecordValue = this.workspace.documents[application.documentId];
+      if (documentRecordValue) documentRecordValue.status = "frozen";
+    }
     this.persist();
-    return record;
+    return exportRecord;
   }
 
   replaceWorkspace(input) {

@@ -4,7 +4,9 @@ import { evaluateExportReadiness, runResumeChecks } from "../src/v2/checks.js";
 import { createDefaultDocument } from "../src/v2/contracts.js";
 import {
   ApplicationWorkspaceStore,
+  applyMasterSyncPlan,
   createEvidenceRecord,
+  createMasterSyncPlan,
   createWorkspaceBackup,
   extractJDRequirements,
   importWorkspaceBackup,
@@ -52,6 +54,50 @@ test("岗位版本保存创建基线并与母版独立编辑", () => {
   assert.equal(store.getActiveDocument().summary, masterSummary);
   store.activate(application.documentId);
   assert.equal(store.getActiveDocument().summary, "岗位定制摘要");
+});
+
+test("母版三方同步只自动更新岗位版未修改字段并逐项保留冲突", () => {
+  const store = new ApplicationWorkspaceStore(new MemoryStorage());
+  const master = store.getMasterDocument();
+  master.summary = "创建时摘要";
+  master.profile.phone = "138-0000-0000";
+  store.setActiveDocument(master);
+  const application = store.createApplication({ company: "示例科技", role: "产品经理" });
+  const job = store.getActiveDocument();
+  job.summary = "岗位定制摘要";
+  store.setActiveDocument(job);
+
+  store.activate(store.workspace.masterDocumentId);
+  const currentMaster = store.getActiveDocument();
+  currentMaster.summary = "母版更新摘要";
+  currentMaster.profile.phone = "139-0000-0000";
+  store.setActiveDocument(currentMaster);
+  store.activate(application.documentId);
+
+  const plan = store.previewMasterSync(application.id);
+  assert.ok(plan.autoUpdates.some((item) => item.path === "profile.phone"));
+  const summaryConflict = plan.conflicts.find((item) => item.path === "summary");
+  assert.ok(summaryConflict);
+  const result = store.syncApplicationWithMaster(application.id, { [summaryConflict.id]: "job" });
+  assert.equal(result.document.profile.phone, "139-0000-0000");
+  assert.equal(result.document.summary, "岗位定制摘要");
+  assert.equal(store.getActiveApplication().masterBaseline.summary, "母版更新摘要");
+});
+
+test("三方同步支持母版新增结构并要求所有冲突显式选择", () => {
+  const baseline = createDefaultDocument();
+  const master = structuredClone(baseline);
+  const job = structuredClone(baseline);
+  master.sections.push({ id: "section-new", type: "certifications", title: "认证证书", entries: [] });
+  master.summary = "母版新摘要";
+  job.summary = "岗位版摘要";
+  const plan = createMasterSyncPlan(baseline, master, job);
+  assert.ok(plan.autoUpdates.some((item) => item.path === "sections.section-new"));
+  const conflict = plan.conflicts.find((item) => item.path === "summary");
+  assert.throws(() => applyMasterSyncPlan(job, master, plan), /需要选择如何处理/);
+  const result = applyMasterSyncPlan(job, master, plan, { [conflict.id]: "master" });
+  assert.equal(result.document.summary, "母版新摘要");
+  assert.ok(result.document.sections.some((item) => item.id === "section-new"));
 });
 
 test("照片资产按稳定哈希去重并可恢复完整简历", () => {
@@ -117,4 +163,20 @@ test("工作区备份包含岗位资料但递归剥离凭据", () => {
   const restored = importWorkspaceBackup(backup);
   assert.equal(restored.applications[0].company, "示例公司");
   assert.equal(restored.documents[application.documentId].document.nested.note, "保留");
+});
+
+test("投递 PDF 冻结岗位快照并可复制为可编辑新版本", () => {
+  const store = new ApplicationWorkspaceStore(new MemoryStorage());
+  const application = store.createApplication({ company: "示例公司", role: "工程师" });
+  store.recordExport("pdf", { paper: "A4" });
+  assert.equal(store.workspace.documents[application.documentId].status, "frozen");
+  assert.equal(store.getActiveApplication().status, "applied");
+  const changed = store.getActiveDocument();
+  changed.summary = "不应覆盖快照";
+  assert.throws(() => store.setActiveDocument(changed), /只读快照/);
+  const copy = store.copyApplication(application.id);
+  assert.equal(copy.status, "draft");
+  assert.equal(copy.parentApplicationId, application.id);
+  assert.equal(store.workspace.documents[copy.documentId].status, "editable");
+  assert.equal(copy.exportRecords.length, 0);
 });
