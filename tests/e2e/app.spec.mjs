@@ -137,7 +137,7 @@ test("选区 AI 必须先测试连接，建议经差异预览应用并可撤销"
 
 test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => {
   let modelsRequest;
-  let chatRequest;
+  const chatRequests = [];
   await page.route("https://api.biyuan.ai/v1/models", async (route) => {
     modelsRequest = route.request();
     await route.fulfill({
@@ -147,11 +147,17 @@ test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => 
     });
   });
   await page.route("https://api.biyuan.ai/v1/chat/completions", async (route) => {
-    chatRequest = route.request();
+    const request = route.request();
+    chatRequests.push(request);
+    const body = request.postDataJSON();
+    const isTest = body.messages?.some((message) => message.content.includes('"ok"'));
+    const content = isTest
+      ? '{"ok":true}'
+      : [{ type: "text", text: '```json\n{"suggestion":"将企业工作台核心流程重构为可量化改进，关键任务完成时间缩短 32%。","reason":"突出动作与结果"}\n```' }];
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ choices: [{ message: { content: "{\"ok\":true}" } }] }),
+      body: JSON.stringify({ choices: [{ message: { content } }] }),
     });
   });
 
@@ -171,8 +177,24 @@ test("彼源预设读取模型并使用最小兼容请求", async ({ page }) => 
   await fields.nth(0).fill("gpt-example");
   await page.getByRole("button", { name: "测试连接并保存" }).click();
   await expect(page.locator("#ai-status-badge")).toHaveText("彼源 AI 已连接");
-  expect(chatRequest.headers().authorization).toBe("Bearer test-key");
-  expect(Object.keys(chatRequest.postDataJSON()).sort()).toEqual(["messages", "model"]);
+  expect(chatRequests[0].headers().authorization).toBe("Bearer test-key");
+  expect(Object.keys(chatRequests[0].postDataJSON()).sort()).toEqual(["messages", "model"]);
+
+  const bullet = page.locator("#resume-paper .bullet-text").first();
+  await bullet.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await page.locator("[data-ai-rewrite='professional']").click();
+  await expect(page.getByRole("heading", { name: "改写建议" })).toBeVisible();
+  await expect(page.locator(".diff-preview")).toContainText("关键任务完成时间缩短 32%");
+  const rewriteBody = chatRequests[1].postDataJSON();
+  expect(Object.keys(rewriteBody).sort()).toEqual(["messages", "model"]);
+  expect(rewriteBody.messages[0].content).toContain('"required":["suggestion","reason"]');
 });
 
 for (const viewport of [
@@ -239,7 +261,7 @@ test("移动端检查器支持拖动，并保留焦点、动效与触控约束",
   box = await handle.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2, 780, { steps: 8 });
+  await page.mouse.move(box.x + box.width / 2, 838, { steps: 8 });
   await page.mouse.up();
   await expect(page.locator("body")).not.toHaveClass(/inspector-open/);
   await expect(handle).toHaveAttribute("aria-expanded", "false");

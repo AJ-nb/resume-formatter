@@ -61,6 +61,18 @@ if (/apiKey/.test(readFileSync(join(root, "src/v2/contracts.js"), "utf8"))) fail
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
 if (!lock.lockfileVersion || !lock.packages?.[""]) failures.push("package-lock.json: 锁文件结构无效");
+const contractSource = readFileSync(join(root, "src/v2/contracts.js"), "utf8");
+const contractVersion = contractSource.match(/export const APP_VERSION = ["']([^"']+)["'];/)?.[1];
+const artifactVersion = html.match(/<meta name="application-version" content="([^"]+)">/)?.[1];
+const versionSources = [
+  ["package-lock.json 顶层版本", lock.version],
+  ["package-lock.json 根包版本", lock.packages?.[""]?.version],
+  ["src/v2/contracts.js APP_VERSION", contractVersion],
+  ["构建产物 application-version", artifactVersion],
+];
+for (const [label, version] of versionSources) {
+  if (version !== packageJson.version) failures.push(`${label}: ${version || "缺失"}，应为 ${packageJson.version}`);
+}
 const directDependencies = { ...packageJson.dependencies, ...packageJson.devDependencies };
 const allowedLicenses = /^(?:MIT|ISC|Apache-2\.0|BSD-2-Clause|BSD-3-Clause|BlueOak-1\.0\.0|\(MIT OR GPL-3\.0-or-later\))$/;
 for (const name of Object.keys(directDependencies)) {

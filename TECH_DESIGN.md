@@ -113,7 +113,7 @@ ImportResult {
 - Gemini：`generateContent` 和 `responseJsonSchema`；
 - DeepSeek / Ollama：OpenAI-compatible Chat Completions，JSON object；
 - OpenRouter / Custom：Chat Completions，JSON Schema；
-- 彼源 AI：`GET /models` 读取当前令牌可用模型；Chat Completions 只发送 `model + messages`，不强制附加可能与上游模型不兼容的 `response_format`、`temperature` 或 `stream`；
+- 彼源 AI：`GET /models` 读取当前令牌可用模型；Chat Completions 只发送 `model + messages`，在 system message 内声明结果 Schema，不强制附加可能与上游模型不兼容的 `response_format`、`temperature` 或 `stream`；
 - 所有请求支持超时与 AbortSignal；错误响应截断后展示；
 - 所有运行时网络 API 只允许位于 `src/v2/ai.js`。
 

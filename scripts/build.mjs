@@ -63,6 +63,7 @@ async function build() {
     bundleCss(),
   ]);
   const html = template
+    .replace("__APP_VERSION__", packageJson.version)
     .replace("<!-- __STYLES__ -->", () => `<style>${css}</style>`)
     .replace("<!-- __SCRIPTS__ -->", () => `<script>${javascript}</script>`);
 
