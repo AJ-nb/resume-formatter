@@ -1,4 +1,4 @@
-# Technical Design | Resume Formatter v2
+# Technical Design | Resume Formatter v2.2
 
 ## 1. Architecture
 
@@ -25,6 +25,8 @@ src/v2/*.js + src/styles/v2.css + src/index.template.html
 | `import-core.js` | 当前 JSON、JSON Resume、提取文本映射 |
 | `file-import.js` | 本地 PDF.js / Mammoth 文件读取与限制 |
 | `store.js` | 文档状态、本地草稿、版本、undo / redo |
+| `workspace.js` | ApplicationWorkspaceV1、旧存储迁移、岗位快照、证据、JD 要求、资产去重和脱敏备份 |
+| `checks.js` | ResumeCheckV2 与 ExportReadiness，投递 PDF 门禁 |
 | `renderer.js` | 纸张 DOM、移动编辑器、机器读取规则、溢出定位、diff |
 | `ai.js` | 凭据策略、七类提供商协议、模型读取、结构化响应、选区和事实保护 |
 | `app.js` | UI 编排、事件、导入确认、导出和用户命令 |
@@ -98,6 +100,16 @@ ImportResult {
 
 只有用户确认后 `document` 才替换当前状态。
 
+### ApplicationWorkspaceV1
+
+工作区独立保存母版、岗位文档记录、岗位任务、母版创建基线、证据、要求匹配、导出记录和不可变照片资产。活动文档在进入渲染器前恢复完整照片，在写入工作区时按稳定内容哈希去重。普通简历导出只读取活动 `ResumeDocumentV2`；工作区 JSON 通过递归凭据剥离后单独导出。
+
+首次迁移会复制现有文档和本地版本，并把原始 JSON 写入独立回滚键；旧存储键不删除。岗位版本创建后独立编辑，v2.2 不执行母版自动同步。
+
+### ResumeCheckV2 / ExportReadiness
+
+检查使用稳定代码、`blocker / warning / info`、字段路径、修复动作和绕过能力。姓名或联系方式缺失、Schema 无效和页面溢出为 blocker。门禁仅对投递 PDF 强制；普通 HTML、Markdown、简历 JSON 和工作区 JSON 始终可备份。
+
 ## 4. Import Boundaries
 
 - 最大文件 25 MB；PDF 最多 30 页；
@@ -115,6 +127,7 @@ ImportResult {
 - OpenRouter / Custom：Chat Completions，JSON Schema；
 - 彼源 AI：`GET /models` 读取当前令牌可用模型；Chat Completions 只发送 `model + messages`，在 system message 内声明结果 Schema，不强制附加可能与上游模型不兼容的 `response_format`、`temperature` 或 `stream`；
 - 所有请求支持超时与 AbortSignal；错误响应截断后展示；
+- 证据 Bullet 请求只包含选定 EvidenceRecord、目标字段和明确选择的要求，返回证据 ID 并继续执行事实变化检查；
 - 所有运行时网络 API 只允许位于 `src/v2/ai.js`。
 
 浏览器 BYOK 不是秘密代理。用户密钥可被当前页面环境读取，因此 UI 必须显示风险；项目不在构建物中包含任何密钥。
@@ -132,6 +145,7 @@ ImportResult {
 - 导入文本通过 `textContent` / 表单 value 渲染，不注入 HTML；
 - HTML 导出克隆文档、清空 modal / toast / 选区工具和敏感表单值；
 - AI 凭据不进入简历合同；
+- AI 凭据不进入工作区合同；普通简历导出主动清空岗位动态内容，工作区备份递归剥离凭据字段；
 - 发布脚本扫描用户路径、手机号、非示例邮箱和密钥形态；
 - 构建物禁止外部 `src` / `href`；
 - 直接依赖许可证必须位于允许列表；

@@ -57,6 +57,8 @@ for (const relativePath of publishable.filter((path) =>
 const aiSource = readFileSync(join(root, "src/v2/ai.js"), "utf8");
 if (!aiSource.includes("fetchImpl")) failures.push("src/v2/ai.js: 缺少可测试的网络适配边界");
 if (/apiKey/.test(readFileSync(join(root, "src/v2/contracts.js"), "utf8"))) failures.push("src/v2/contracts.js: 凭据不得进入简历合同");
+const workspaceSource = readFileSync(join(root, "src/v2/workspace.js"), "utf8");
+if (!workspaceSource.includes("createWorkspaceBackup") || !workspaceSource.includes("stripCredentials")) failures.push("src/v2/workspace.js: 工作区备份缺少凭据剥离边界");
 
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));

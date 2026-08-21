@@ -1,4 +1,5 @@
 import { documentToPlainText } from "./contracts.js";
+import { validateEvidence } from "./workspace.js";
 
 export const AI_PROVIDERS = Object.freeze({
   openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-5-mini", protocol: "responses", keyRequired: true, structuredOutput: "json_schema" },
@@ -79,6 +80,17 @@ const jdSchema = {
         },
       },
     },
+  },
+};
+
+const evidenceDraftSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["suggestion", "evidenceIds", "warnings"],
+  properties: {
+    suggestion: { type: "string" },
+    evidenceIds: { type: "array", items: { type: "string" } },
+    warnings: { type: "array", items: { type: "string" } },
   },
 };
 
@@ -498,6 +510,59 @@ export async function compareWithJD(config, document, jdText, options = {}) {
   }, options);
   if (!Array.isArray(payload?.suggestions)) throw new Error("JD 对照结果缺少 suggestions 数组。");
   return { keywords, suggestions: payload.suggestions.slice(0, 20), provider: value.provider, model: value.model };
+}
+
+export async function draftBulletFromEvidence(config, request, options = {}) {
+  const value = await assertTestedConfig(config);
+  const evidence = (request.evidence || []).map((item) => ({
+    id: String(item.id || ""),
+    context: String(item.context || ""),
+    task: String(item.task || ""),
+    action: String(item.action || ""),
+    scope: String(item.scope || ""),
+    result: String(item.result || ""),
+    source: String(item.source || ""),
+    verification: String(item.verification || "unverified"),
+  }));
+  if (!evidence.length) throw new Error("请先选择至少一条证据。");
+  const evidenceIssues = evidence.flatMap(validateEvidence);
+  if (evidenceIssues.length) throw new Error(evidenceIssues.map((item) => item.message).join(" "));
+  const payload = await requestStructured(value, {
+    system: [
+      "你是严谨的简历编辑，只能使用输入 evidence 中明确存在的事实生成一条简历 Bullet。",
+      "不得推断数字、规模、日期、技能、因果或业务结果。缺少数字时保留‘待补充’，不要创造占位数字。",
+      "evidenceIds 必须列出实际使用的证据 ID；warnings 列出待核实项。保持目标岗位语言。返回 JSON。",
+    ].join("\n"),
+    user: JSON.stringify({
+      targetFieldPath: String(request.targetFieldPath || ""),
+      requirement: request.requirement ? {
+        id: String(request.requirement.id || ""),
+        excerpt: String(request.requirement.excerpt || ""),
+      } : null,
+      evidence,
+    }),
+    schema: evidenceDraftSchema,
+  }, options);
+  const suggestion = String(payload?.suggestion || "").trim();
+  if (!suggestion) throw new Error("AI 没有返回可用的 Bullet 建议。");
+  const allowedIds = new Set(evidence.map((item) => item.id));
+  const evidenceIds = Array.isArray(payload.evidenceIds) ? payload.evidenceIds.map(String) : [];
+  if (!evidenceIds.length || evidenceIds.some((id) => !allowedIds.has(id))) throw new Error("AI 返回的证据引用无效。");
+  const sourceText = evidence.map((item) => [item.context, item.task, item.action, item.scope, item.result].join(" ")).join("\n");
+  const factWarnings = compareFacts(sourceText, suggestion);
+  const warnings = Array.isArray(payload.warnings) ? payload.warnings.map(String).filter(Boolean).slice(0, 10) : [];
+  if (evidence.some((item) => item.verification === "unverified")) warnings.unshift("使用了尚未核实的证据，请在投递前确认。");
+  return {
+    suggestion,
+    evidenceIds,
+    warnings: [...new Set(warnings)],
+    factWarnings,
+    requiresConfirmation: factWarnings.changed || warnings.length > 0,
+    targetFieldPath: String(request.targetFieldPath || ""),
+    provider: value.provider,
+    model: value.model,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 export const aiStorageKeys = Object.freeze({ session: SESSION_KEY, local: LOCAL_KEY });

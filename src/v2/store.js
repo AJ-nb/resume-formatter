@@ -1,8 +1,8 @@
-import { clone, createDefaultDocument, migrateDocument } from "./contracts.js";
+import { clone, migrateDocument } from "./contracts.js";
+import { ApplicationWorkspaceStore } from "./workspace.js";
 
 const DOCUMENT_KEY = "resume-formatter:document-v2";
 const VERSION_KEY = "resume-formatter:versions-v2";
-const LEGACY_LAST_KEY = "resume-formatter:last-document";
 const UNDO_LIMIT = 100;
 
 function safeStorage(storage) {
@@ -19,7 +19,8 @@ function safeStorage(storage) {
 export class ResumeStore {
   constructor(storage = globalThis.localStorage) {
     this.storage = storage ? safeStorage(storage) : null;
-    this.document = this.load();
+    this.workspace = new ApplicationWorkspaceStore(this.storage);
+    this.document = this.workspace.getActiveDocument();
     this.undoStack = [];
     this.redoStack = [];
     this.listeners = new Set();
@@ -27,23 +28,7 @@ export class ResumeStore {
   }
 
   load() {
-    if (!this.storage) return createDefaultDocument();
-    const current = this.storage.getItem(DOCUMENT_KEY);
-    if (current) {
-      try { return migrateDocument(JSON.parse(current)); } catch { /* recover below */ }
-    }
-    const legacyId = this.storage.getItem(LEGACY_LAST_KEY);
-    if (legacyId) {
-      const legacy = this.storage.getItem(`resume-formatter:draft:${legacyId}`);
-      if (legacy) {
-        try {
-          const migrated = migrateDocument(JSON.parse(legacy));
-          this.storage.setItem(DOCUMENT_KEY, JSON.stringify(migrated));
-          return migrated;
-        } catch { /* recover below */ }
-      }
-    }
-    return createDefaultDocument();
+    return this.workspace.getActiveDocument();
   }
 
   subscribe(listener) {
@@ -103,6 +88,7 @@ export class ResumeStore {
   save() {
     if (!this.storage) return false;
     this.document.metadata.lastSavedAt = new Date().toISOString();
+    this.workspace.setActiveDocument(this.document);
     this.storage.setItem(DOCUMENT_KEY, JSON.stringify(this.document));
     this.dirty = false;
     this.notify("save");
@@ -126,6 +112,35 @@ export class ResumeStore {
   listVersions() {
     if (!this.storage) return [];
     try { return JSON.parse(this.storage.getItem(VERSION_KEY) || "[]"); } catch { return []; }
+  }
+
+  activateDocument(documentId) {
+    this.workspace.setActiveDocument(this.document);
+    this.document = this.workspace.activate(documentId);
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.dirty = false;
+    this.notify("activate-document");
+    return this.document;
+  }
+
+  createApplication(input) {
+    this.workspace.setActiveDocument(this.document);
+    const application = this.workspace.createApplication(input);
+    this.document = this.workspace.getActiveDocument();
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.dirty = false;
+    this.notify("create-application");
+    return application;
+  }
+
+  replaceWorkspace(input) {
+    this.document = this.workspace.replaceWorkspace(input);
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
+    this.dirty = false;
+    this.notify("replace-workspace");
   }
 }
 
