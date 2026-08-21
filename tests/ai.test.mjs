@@ -79,6 +79,52 @@ test("彼源读取当前令牌可用模型且不发送简历内容", async () =>
   assert.deepEqual(result.models, ["gpt-example", "claude-example"]);
 });
 
+test("彼源 prompt 模式携带完整 Schema 并兼容文本分片响应", async () => {
+  let body;
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["suggestion", "reason"],
+    properties: { suggestion: { type: "string" }, reason: { type: "string" } },
+  };
+  const result = await requestStructured({
+    provider: "biyuan",
+    apiKey: "test-key",
+    model: "gpt-example",
+  }, {
+    system: "只改写选中的文字。",
+    user: '{"selectedText":"负责产品设计"}',
+    schema,
+  }, {
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        choices: [{
+          message: { content: [{ type: "text", text: '```json\n{"suggestion":"主导产品设计","reason":"职责表达更清晰"}\n```' }] },
+        }],
+      }), { status: 200 });
+    },
+  });
+  assert.deepEqual(Object.keys(body).sort(), ["messages", "model"]);
+  assert.match(body.messages[0].content, /JSON Schema/);
+  assert.match(body.messages[0].content, /"required":\["suggestion","reason"\]/);
+  assert.deepEqual(result, { suggestion: "主导产品设计", reason: "职责表达更清晰" });
+});
+
+test("兼容端点区分提供商错误、截断和空最终文本", async () => {
+  const config = { provider: "biyuan", apiKey: "test-key", model: "gpt-example" };
+  const request = { system: "s", user: "u", schema: okSchema };
+  await assert.rejects(() => requestStructured(config, request, {
+    fetchImpl: async () => new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), { status: 200 }),
+  }), /upstream unavailable/);
+  await assert.rejects(() => requestStructured(config, request, {
+    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: "length", message: { content: "" } }] }), { status: 200 }),
+  }), /长度限制被截断/);
+  await assert.rejects(() => requestStructured(config, request, {
+    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: null } }] }), { status: 200 }),
+  }), /没有返回最终文本/);
+});
+
 test("彼源模型读取覆盖认证、空列表和非法响应", async () => {
   const config = { provider: "biyuan", apiKey: "test-key" };
   await assert.rejects(() => listAvailableModels(config, {

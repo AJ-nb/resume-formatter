@@ -220,6 +220,31 @@ function parseJsonText(text) {
   }
 }
 
+function schemaPrompt(schema) {
+  return [
+    "输出要求：只返回一个符合下列 JSON Schema 的 JSON 对象，不要添加 Markdown、解释或其他文字。",
+    JSON.stringify(schema),
+  ].join("\n");
+}
+
+function chatMessageText(choice) {
+  const content = choice?.message?.content;
+  if (typeof content === "string" && content.trim()) return content;
+  if (Array.isArray(content)) {
+    const text = content
+      .map((part) => typeof part === "string" ? part : part?.text)
+      .filter((part) => typeof part === "string")
+      .join("")
+      .trim();
+    if (text) return text;
+  }
+  if (content && typeof content === "object" && typeof content.text === "string" && content.text.trim()) {
+    return content.text;
+  }
+  if (typeof choice?.text === "string" && choice.text.trim()) return choice.text;
+  return "";
+}
+
 function outputFromResponses(data) {
   if (typeof data?.output_text === "string") return data.output_text;
   for (const item of data?.output || []) {
@@ -293,9 +318,12 @@ async function callResponses(config, system, user, schema, options) {
 
 async function callChat(config, system, user, schema, options) {
   const provider = AI_PROVIDERS[config.provider];
+  const systemPrompt = provider.structuredOutput === "prompt"
+    ? `${system}\n\n${schemaPrompt(schema)}`
+    : system;
   const body = {
     model: config.model,
-    messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    messages: [{ role: "system", content: systemPrompt }, { role: "user", content: user }],
   };
   if (!provider.minimalChatRequest) {
     body.temperature = 0.2;
@@ -312,8 +340,14 @@ async function callChat(config, system, user, schema, options) {
     body: JSON.stringify(body),
   }, options.timeoutMs, options.fetchImpl, options.signal);
   const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== "string") throw new Error("兼容端点返回中缺少 message.content。");
+  if (data?.error) {
+    const detail = typeof data.error === "string" ? data.error : data.error.message || JSON.stringify(data.error);
+    throw new Error(`提供商返回错误：${String(detail).slice(0, 500)}`);
+  }
+  const choice = data?.choices?.[0];
+  if (choice?.finish_reason === "length") throw new Error("模型输出因长度限制被截断，请重试或更换模型。");
+  const content = chatMessageText(choice);
+  if (!content) throw new Error("兼容端点没有返回最终文本，请重试或选择支持 Chat Completions 的模型。");
   return parseJsonText(content);
 }
 

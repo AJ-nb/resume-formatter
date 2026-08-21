@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  APP_VERSION,
   TEMPLATES,
   createDefaultDocument,
   migrateDocument,
@@ -9,6 +11,14 @@ import {
 } from "../src/v2/contracts.js";
 import { importJsonObject, parseExtractedResumeText, sanitizePlainText } from "../src/v2/import-core.js";
 import { parseMarkdownV2, serializeMarkdown } from "../src/v2/markdown.js";
+
+test("应用版本与包元数据保持一致", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const lock = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+  assert.equal(APP_VERSION, packageJson.version);
+  assert.equal(lock.version, packageJson.version);
+  assert.equal(lock.packages[""].version, packageJson.version);
+});
 
 test("Schema v1 幂等迁移并保留照片与版本记录", () => {
   const legacy = {
